@@ -1,0 +1,743 @@
+#Requires AutoHotkey v2.0
+#SingleInstance Force
+Persistent
+SetWorkingDir(A_ScriptDir)
+
+; We hide windows via WinHide, then later need to read their titles, activate,
+; and close them while still hidden. WinGetTitle, WinActivate, and WinClose all
+; respect DetectHiddenWindows for matching - turn it on globally so they find
+; our hidden hwnds. WinShow is exempt and works on hidden windows regardless.
+DetectHiddenWindows(true)
+
+;==============================================================================
+; minimize-to-tray - minimize the focused window to the system tray, grouped by app.
+;
+; Triggers:
+;   Win+Shift+Z                  - minimize the focused window
+;   Middle-click on title bar    - minimize that window
+;==============================================================================
+
+;------------------------------------------------------------------------------
+; Constants - Win32 messages, Shell_NotifyIcon, WinEvent
+;------------------------------------------------------------------------------
+global WM_USER             := 0x0400
+global WM_TRAYCALLBACK     := WM_USER + 1     ; 0x0401
+global WM_LBUTTONUP        := 0x0202
+global WM_RBUTTONUP        := 0x0205
+global WM_CONTEXTMENU      := 0x007B
+global WM_NCHITTEST        := 0x0084
+
+global NIM_ADD             := 0x00000000
+global NIM_MODIFY          := 0x00000001
+global NIM_DELETE          := 0x00000002
+
+global NIF_MESSAGE         := 0x00000001
+global NIF_ICON            := 0x00000002
+global NIF_TIP             := 0x00000004
+
+global EVENT_OBJECT_DESTROY  := 0x8001
+global OBJID_WINDOW          := 0
+global CHILDID_SELF          := 0
+global WINEVENT_OUTOFCONTEXT := 0
+
+global HTCAPTION           := 2
+
+; NOTIFYICONDATAW size = 976 bytes on Windows 10/11 x64.
+global NID_SIZE := 976
+
+;------------------------------------------------------------------------------
+; State
+;------------------------------------------------------------------------------
+global Groups           := Map()         ; processName -> { windows: Array, trayUid: Int, hIcon: Int }
+global nextTrayUid      := 1             ; monotonic UID allocator
+global scriptGuiHwnd    := 0             ; hidden recipient hwnd for Shell_NotifyIcon callbacks
+global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
+global hWinEventHook    := 0             ; SetWinEventHook handle
+
+; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
+global APP_VERSION      := "1.0.0"       ; embedded version, kept in sync with vpk pack --packVersion
+global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
+global UpdateVersion    := ""            ; the new version string from the helper
+global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
+global appImagePath     := ""            ; resolved at script init - source file in dev, %TEMP% in compiled
+
+;==============================================================================
+; Triggers
+;==============================================================================
+#+z::MinimizeFocused()
+
+#HotIf MouseOverTitleBar()
+MButton::MinimizeUnderCursor()
+#HotIf
+
+;------------------------------------------------------------------------------
+; Initialization
+;------------------------------------------------------------------------------
+; Dev-only flag for smoke-testing the pulsing dot without a real update.
+; Pass /devshowdot on the command line to force UpdateAvailable := true.
+for arg in A_Args {
+    if (arg = "/devshowdot") {
+        UpdateAvailable := true
+        UpdateVersion := "1.0.99-dev"
+    }
+}
+
+Initialize()
+
+Initialize() {
+    global scriptGuiHwnd, winEventCallback, hWinEventHook
+
+    ; Hidden stub GUI whose hwnd receives Shell_NotifyIcon callback messages.
+    ; Never shown. Owns no visible UI.
+    scriptGui := Gui("+ToolWindow -Caption", "minimize-to-tray-stub")
+    scriptGui.Show("Hide x-1000 y-1000 w1 h1 NoActivate")
+    scriptGuiHwnd := scriptGui.Hwnd
+
+    ; Register handler for tray callback message (WM_TRAYCALLBACK = 0x0401).
+    OnMessage(WM_TRAYCALLBACK, OnTrayMessage)
+
+    ; Custom app tray icon. When running as compiled .exe, the embedded icon
+    ; (set via Ahk2Exe /icon during compile) is already used by default.
+    ; When running as raw .ahk source, point to the file in assets/.
+    if (!A_IsCompiled) {
+        iconPath := A_ScriptDir "\assets\app.ico"
+        if (FileExist(iconPath))
+            TraySetIcon(iconPath)
+    }
+
+    ; Resolve a path to the app PNG (used in the About dialog).
+    ; - Raw .ahk: the source file in assets/.
+    ; - Compiled .exe: extract once to %TEMP% via FileInstall (Ahk2Exe embeds the file).
+    global appImagePath
+    if (A_IsCompiled) {
+        appImagePath := A_Temp "\minimize-to-tray-app.png"
+        if (!FileExist(appImagePath))
+            FileInstall("assets\app.png", appImagePath, true)
+    } else {
+        appImagePath := A_ScriptDir "\assets\app.png"
+    }
+
+    ; Always-visible app tray icon tooltip
+    A_IconTip := "minimize-to-tray`n"
+              .  "Win+Shift+Z or`n"
+              .  "Middle-click title bar`n"
+              .  "minimizes focused window to tray"
+
+    A_TrayMenu.Delete()
+    A_TrayMenu.Add("&About", ShowAbout)
+    A_TrayMenu.Add()
+    A_TrayMenu.Add("E&xit", (*) => ExitApp())
+    A_TrayMenu.Default := "&About"
+    A_TrayMenu.ClickCount := 1   ; single left-click on the app tray icon opens About (default item)
+
+    ; Register destroy hook for orphan cleanup.
+    ; No "F" (Fast) option - we want the callback marshaled to AHK's main thread
+    ; before we touch Groups / call Shell_NotifyIcon.
+    winEventCallback := CallbackCreate(OnWinEvent, , 7)
+    hWinEventHook := DllCall("SetWinEventHook"
+                              , "UInt", EVENT_OBJECT_DESTROY
+                              , "UInt", EVENT_OBJECT_DESTROY
+                              , "Ptr",  0
+                              , "Ptr",  winEventCallback
+                              , "UInt", 0       ; idProcess (0 = all processes)
+                              , "UInt", 0       ; idThread
+                              , "UInt", WINEVENT_OUTOFCONTEXT
+                              , "Ptr")
+
+    ; OnExit cleanup
+    OnExit(Cleanup)
+
+    ; Schedule an asynchronous Velopack update check 5 seconds after start.
+    ; Stub-only until updater-helper.exe is built and packaged with the app.
+    SetTimer(CheckForUpdateAsync, -5000)
+}
+
+;==============================================================================
+; About menu - custom Gui with pulsing blue update-available dot
+;==============================================================================
+; A global handle so the pulse timer can reach the live Gui control.
+global aboutGui    := 0
+global aboutDot    := 0
+global pulseTimer  := 0
+
+ShowAbout(*) {
+    global aboutGui, aboutDot, pulseTimer, APP_VERSION, UpdateAvailable, UpdateVersion
+
+    ; If a previous About is still showing, just bring it forward.
+    if (aboutGui && IsObject(aboutGui)) {
+        try {
+            aboutGui.Show()
+            return
+        }
+    }
+
+    aboutGui := Gui("+AlwaysOnTop -MinimizeBox -MaximizeBox", "About minimize-to-tray")
+    ; MarginX is small here only so AutoSize doesn't pad the dot (the rightmost
+    ; control) far from the dialog's right edge. All other controls use explicit
+    ; x = 28 so their visual left/right padding is unaffected by this.
+    aboutGui.MarginX := 15
+    aboutGui.MarginY := 20
+    aboutGui.BackColor := "FFFFFF"
+
+    contentW := 440   ; inner content width; outer width = contentW + 2 * MarginX
+
+    ; ---- Title row "cell": image | title+version, centered as a group ----
+    ; The image+text pair is treated as a single horizontally-centered unit in the
+    ; dialog so the image doesn't hug the left edge while the title floats in the
+    ; middle (which read as "off center" visually). Image is a single cell spanning
+    ; two text rows; title row 1 and version row 2 share a narrow text band right
+    ; after the image, each line centered within that band.
+    imgSize    := 96
+    imgY       := 24
+    textBlockW := 220                                  ; narrow band keeps text tight to image
+    imgGap     := 20                                   ; horizontal gap between image and text
+
+    groupW     := imgSize + imgGap + textBlockW        ; 336 total group width
+    imgX       := 28 + (contentW - groupW) // 2        ; center the group in contentW
+    imgCenterY := imgY + imgSize // 2                  ; vertical anchor for title text
+    textStartX := imgX + imgSize + imgGap
+
+    ; Title + version block - combined height ~36px, centered on imgCenterY (72).
+    titleY := imgCenterY - 19   ; tuned so title baseline + version sit centered
+
+    ; App image (now horizontally centered with the title block as one group)
+    if (FileExist(appImagePath))
+        aboutGui.Add("Picture", Format("x{1} y{2} w{3} h{3}", imgX, imgY, imgSize), appImagePath)
+
+    aboutGui.SetFont("s16 Bold c000000", "Segoe UI")
+    aboutGui.Add("Text", Format("x{1} y{2} w{3} Center", textStartX, titleY, textBlockW), "minimize-to-tray")
+
+    aboutGui.SetFont("s9 Norm c707070", "Segoe UI")
+    aboutGui.Add("Text", Format("x{1} y+4 w{2} Center", textStartX, textBlockW), "v" APP_VERSION)
+
+    ; Pulsing dot at the top-right CORNER (decoupled from the title row vertically).
+    ; Sits well above the title with comfortable top + right padding from the dialog
+    ; corner, so it reads as a notification-style indicator rather than something
+    ; squished next to the title.
+    if (UpdateAvailable) {
+        dotW       := 32
+        rightEdge  := 28 + contentW
+        dotX       := rightEdge - dotW + 20     ; 20px further right (extends into MarginX, dialog grows ~20px)
+        dotY       := 4                         ; 4px below dialog top - tucked into the corner
+        aboutGui.SetFont("s22 Bold cBlue", "Segoe UI Symbol")
+        aboutDot := aboutGui.Add("Text", Format("x{1} y{2} w{3} h36 Center", dotX, dotY, dotW), Chr(9679))
+        aboutDot.OnEvent("Click", OnClickUpdateDot)
+        pulseTimer := PulseDot
+        SetTimer(pulseTimer, 40)
+        ; Cursor-on-control polling drives the hover tooltip (Text controls don't fire
+        ; a MouseEnter event, so we sample MouseGetPos at 100ms instead).
+        SetTimer(UpdateDotTooltip, 100)
+    }
+
+    ; ---- Shortcut block ----
+    ; Bumped down ~20px from the previous layout (request: more breathing room between
+    ; the image/title cell and the shortcut block). Uses an absolute Y so the position
+    ; is decoupled from the version control's y+N flow.
+    shortcutY := imgY + imgSize + 24   ; image bottom + 24px breathing gap
+    aboutGui.SetFont("s11 Norm c000000", "Segoe UI")
+    aboutGui.Add("Text", Format("x28 y{1} w{2} Center", shortcutY, contentW),
+                 "Win+Shift+Z   |   or   |   Middle-click on a title bar")
+
+    aboutGui.SetFont("s10 Italic c606060", "Segoe UI")
+    aboutGui.Add("Text", Format("x28 y+8 w{1} Center", contentW),
+                 "minimize focused window to tray")
+
+    ; ---- Footer (URL + OK) ----
+    ; Tightened gaps to compensate for the shortcut block bumping down; total dialog
+    ; height stays effectively unchanged.
+    aboutGui.SetFont("s9 Norm c808080", "Segoe UI")
+    aboutGui.Add("Text", Format("x28 y+24 w{1} Center", contentW),
+                 "https://github.com/bilbospocketses/minimize-to-tray")
+
+    okX := 28 + (contentW - 96) // 2
+    aboutGui.SetFont("s9 Norm c000000", "Segoe UI")
+    aboutGui.Add("Button", Format("x{1} y+12 w96 h28 Default", okX), "OK")
+            .OnEvent("Click", (*) => CloseAbout())
+    aboutGui.OnEvent("Close",  (*) => CloseAbout())
+    aboutGui.OnEvent("Escape", (*) => CloseAbout())
+
+    aboutGui.Show("AutoSize Center")
+}
+
+CloseAbout() {
+    global aboutGui, aboutDot, pulseTimer
+    if (pulseTimer) {
+        SetTimer(pulseTimer, 0)
+        pulseTimer := 0
+    }
+    SetTimer(UpdateDotTooltip, 0)
+    ToolTip()    ; dismiss any lingering hover tooltip
+    if (aboutGui && IsObject(aboutGui)) {
+        try aboutGui.Destroy()
+    }
+    aboutGui := 0
+    aboutDot := 0
+}
+
+UpdateDotTooltip() {
+    global aboutGui, aboutDot, UpdateAvailable, UpdateVersion
+    static showing := false
+
+    if (!aboutGui || !IsObject(aboutGui) || !aboutDot || !IsObject(aboutDot) || !UpdateAvailable) {
+        if (showing) {
+            ToolTip()
+            showing := false
+        }
+        return
+    }
+
+    try {
+        MouseGetPos(, , , &ctrlHwnd, 2)   ; flag 2 = report control hwnd under cursor
+    } catch {
+        ctrlHwnd := 0
+    }
+
+    if (ctrlHwnd == aboutDot.Hwnd) {
+        if (!showing) {
+            ToolTip(
+                "Update available: v" UpdateVersion "`n"
+              . "Click to download and install.`n`n"
+              . "minimize-to-tray`n"
+              . "Win+Shift+Z or`n"
+              . "Middle-click title bar`n"
+              . "minimizes focused window to tray"
+            )
+            showing := true
+        }
+    } else if (showing) {
+        ToolTip()
+        showing := false
+    }
+}
+
+PulseDot() {
+    global aboutDot, pulsePhase
+    if (!aboutDot || !IsObject(aboutDot))
+        return
+
+    pulsePhase += 0.18  ; ~1.4 Hz pulse at 40ms tick
+    if (pulsePhase > 6.2832)
+        pulsePhase -= 6.2832
+
+    ; Sine wave eased to (0.35, 1.0) brightness range
+    t := (Sin(pulsePhase) + 1) / 2          ; 0..1
+    intensity := 0.35 + 0.65 * t            ; 0.35..1.0
+
+    ; Lerp between a dim blue (#0a3a8a) and a bright blue (#3b82f6)
+    r := Round(10  + (59  - 10)  * intensity)
+    g := Round(58  + (130 - 58)  * intensity)
+    b := Round(138 + (246 - 138) * intensity)
+    color := Format("{:02X}{:02X}{:02X}", r, g, b)
+
+    try aboutDot.Opt("c" color)
+    try aboutDot.Redraw()
+}
+
+OnClickUpdateDot(*) {
+    global UpdateAvailable
+    if (!UpdateAvailable)
+        return
+
+    ; Spawn the Velopack helper to download + apply + restart.
+    helperPath := A_ScriptDir "\updater-helper.exe"
+    if (!FileExist(helperPath)) {
+        MsgBox("Update helper missing at: " helperPath, "minimize-to-tray", "IconX")
+        return
+    }
+    Run(Format('"{1}" update', helperPath))
+    ; updater-helper handles the restart; our OnExit fires and Velopack swaps the install.
+    ExitApp()
+}
+
+;------------------------------------------------------------------------------
+; Velopack update check (async, fire-and-forget)
+;------------------------------------------------------------------------------
+CheckForUpdateAsync() {
+    global UpdateAvailable, UpdateVersion, A_IsCompiled
+
+    ; Only check when running as compiled exe inside a Velopack install
+    if (!A_IsCompiled)
+        return
+
+    helperPath := A_ScriptDir "\updater-helper.exe"
+    if (!FileExist(helperPath))
+        return
+
+    try {
+        shell := ComObject("WScript.Shell")
+        exec := shell.Exec(Format('"{1}" check', helperPath))
+        exec.StdIn.Close()
+        result := Trim(exec.StdOut.ReadAll(), " `t`r`n")
+        exitCode := exec.ExitCode
+    } catch as err {
+        return  ; helper failed; silently swallow
+    }
+
+    if (exitCode == 0 && result != "" && result != APP_VERSION) {
+        UpdateAvailable := true
+        UpdateVersion := result
+    }
+}
+
+;==============================================================================
+; Triggers - handlers
+;==============================================================================
+MinimizeFocused() {
+    hwnd := WinGetID("A")
+    if (!hwnd)
+        return
+    HideAndStash(hwnd)
+}
+
+MouseOverTitleBar() {
+    global WM_NCHITTEST, HTCAPTION
+
+    MouseGetPos(&x, &y, &hwnd)
+    if (!hwnd)
+        return false
+
+    ; SendMessage WM_NCHITTEST with screen-coord lParam (y << 16 | x).
+    lParam := ((y & 0xFFFF) << 16) | (x & 0xFFFF)
+    try {
+        result := SendMessage(WM_NCHITTEST, 0, lParam, , "ahk_id " hwnd, , , , 200)
+    } catch {
+        return false
+    }
+    return result == HTCAPTION
+}
+
+MinimizeUnderCursor() {
+    MouseGetPos(, , &hwnd)
+    if (!hwnd)
+        return
+    ; Resolve to the top-level window (in case the click landed on a child control).
+    rootHwnd := DllCall("GetAncestor", "Ptr", hwnd, "UInt", 2, "Ptr")  ; GA_ROOT = 2
+    if (rootHwnd)
+        HideAndStash(rootHwnd)
+    else
+        HideAndStash(hwnd)
+}
+
+;==============================================================================
+; Core flow
+;==============================================================================
+HideAndStash(hwnd) {
+    global Groups, nextTrayUid
+
+    try {
+        pid      := WinGetPID("ahk_id " hwnd)
+        procName := ProcessGetName(pid)
+        exePath  := ProcessGetPath(pid)
+    } catch {
+        return  ; window died or we cannot see it
+    }
+
+    if (Groups.Has(procName)) {
+        ; Push onto existing group
+        group := Groups[procName]
+        group.windows.Push(hwnd)
+    } else {
+        ; First window of this type - create new group + new tray icon
+        hIcon := GetExeIcon(exePath)
+        if (!hIcon) {
+            ; Fall back to generic app icon
+            hIcon := DllCall("LoadIconW", "Ptr", 0, "Ptr", 32512, "Ptr")
+        }
+        uid := nextTrayUid
+        nextTrayUid++
+
+        result := ShellNotifyAdd(uid, hIcon, procName)
+        if (!result) {
+            ; Retry once after 500ms
+            Sleep(500)
+            result := ShellNotifyAdd(uid, hIcon, procName)
+        }
+        if (!result) {
+            MsgBox("Shell_NotifyIcon(NIM_ADD) failed twice for " procName ". Aborting minimize.",
+                   "minimize-to-tray", "IconX")
+            DllCall("DestroyIcon", "Ptr", hIcon)
+            return
+        }
+
+        Groups[procName] := { windows: [hwnd], trayUid: uid, hIcon: hIcon }
+        group := Groups[procName]
+    }
+
+    WinHide("ahk_id " hwnd)
+
+    ; Update tooltip with count
+    UpdateGroupTooltip(procName)
+}
+
+UpdateGroupTooltip(procName) {
+    global Groups
+    if (!Groups.Has(procName))
+        return
+    group := Groups[procName]
+    n := group.windows.Length
+    tooltip := procName " (" n " window" (n == 1 ? "" : "s") ")"
+    ShellNotifyModifyTooltip(group.trayUid, group.hIcon, tooltip)
+}
+
+DestroyGroup(procName) {
+    global Groups
+    if (!Groups.Has(procName))
+        return
+    group := Groups[procName]
+    ShellNotifyDelete(group.trayUid)
+    if (group.hIcon)
+        DllCall("DestroyIcon", "Ptr", group.hIcon)
+    Groups.Delete(procName)
+}
+
+RestoreSpecific(procName, hwnd, *) {
+    global Groups
+    if (!Groups.Has(procName))
+        return
+    group := Groups[procName]
+
+    ; Remove hwnd from the stack
+    for i, h in group.windows {
+        if (h == hwnd) {
+            group.windows.RemoveAt(i)
+            break
+        }
+    }
+    try {
+        WinShow("ahk_id " hwnd)
+        WinActivate("ahk_id " hwnd)
+    }
+    if (group.windows.Length == 0)
+        DestroyGroup(procName)
+    else
+        UpdateGroupTooltip(procName)
+}
+
+RestoreAll(procName, *) {
+    global Groups
+    if (!Groups.Has(procName))
+        return
+    group := Groups[procName]
+    ; Restore top-of-stack first
+    i := group.windows.Length
+    while (i >= 1) {
+        hwnd := group.windows[i]
+        try {
+            WinShow("ahk_id " hwnd)
+            WinActivate("ahk_id " hwnd)
+        }
+        i--
+    }
+    group.windows := []
+    DestroyGroup(procName)
+}
+
+CloseAll(procName, *) {
+    global Groups
+    if (!Groups.Has(procName))
+        return
+    group := Groups[procName]
+    ; Clone the array - WinClose may trigger the destroy hook which mutates the stack.
+    snapshot := group.windows.Clone()
+    for hwnd in snapshot {
+        try WinClose("ahk_id " hwnd)
+    }
+    ; The EVENT_OBJECT_DESTROY hook handles bookkeeping as windows die.
+    ; If a WinClose is blocked (cancel prompt), that window stays in the stack
+    ; and the tray icon persists with the survivors.
+}
+
+;------------------------------------------------------------------------------
+; Shell_NotifyIcon wrappers (NIM_ADD / NIM_MODIFY / NIM_DELETE)
+;------------------------------------------------------------------------------
+BuildNid(uid, flags, hIcon := 0, tooltip := "") {
+    global NID_SIZE, scriptGuiHwnd, WM_TRAYCALLBACK
+    nid := Buffer(NID_SIZE, 0)
+
+    NumPut("UInt", NID_SIZE,         nid, 0)    ; cbSize
+    NumPut("Ptr",  scriptGuiHwnd,    nid, 8)    ; hWnd
+    NumPut("UInt", uid,              nid, 16)   ; uID
+    NumPut("UInt", flags,            nid, 20)   ; uFlags
+    NumPut("UInt", WM_TRAYCALLBACK,  nid, 24)   ; uCallbackMessage
+    NumPut("Ptr",  hIcon,            nid, 32)   ; hIcon
+
+    ; szTip is a WCHAR[128] at offset 40 (Unicode, 256 bytes).
+    if (tooltip != "")
+        StrPut(tooltip, nid.Ptr + 40, 127, "UTF-16")
+
+    return nid
+}
+
+ShellNotifyAdd(uid, hIcon, tooltip) {
+    global NIM_ADD, NIF_MESSAGE, NIF_ICON, NIF_TIP
+    flags := NIF_MESSAGE | NIF_ICON | NIF_TIP
+    nid := BuildNid(uid, flags, hIcon, tooltip)
+    return DllCall("shell32\Shell_NotifyIconW", "UInt", NIM_ADD, "Ptr", nid.Ptr, "Int")
+}
+
+ShellNotifyModifyTooltip(uid, hIcon, tooltip) {
+    global NIM_MODIFY, NIF_ICON, NIF_TIP
+    flags := NIF_ICON | NIF_TIP
+    nid := BuildNid(uid, flags, hIcon, tooltip)
+    return DllCall("shell32\Shell_NotifyIconW", "UInt", NIM_MODIFY, "Ptr", nid.Ptr, "Int")
+}
+
+ShellNotifyDelete(uid) {
+    global NIM_DELETE
+    nid := BuildNid(uid, 0)
+    return DllCall("shell32\Shell_NotifyIconW", "UInt", NIM_DELETE, "Ptr", nid.Ptr, "Int")
+}
+
+;------------------------------------------------------------------------------
+; Helpers
+;------------------------------------------------------------------------------
+GetExeIcon(exePath) {
+    ; Returns an HICON for the first large icon embedded in exePath, or 0 on failure.
+    ; Caller is responsible for DestroyIcon.
+    hIconLarge := 0
+    count := DllCall("shell32\ExtractIconExW"
+                     , "WStr", exePath
+                     , "Int",  0           ; nIconIndex (0 = first)
+                     , "Ptr*", &hIconLarge
+                     , "Ptr*", 0           ; phiconSmall - we do not want it
+                     , "UInt", 1
+                     , "UInt")
+    return (count >= 1 && hIconLarge) ? hIconLarge : 0
+}
+
+HwndToGroup(hwnd) {
+    ; Reverse lookup: returns the processName of the group containing hwnd, or "" if not tracked.
+    global Groups
+    for procName, group in Groups {
+        for trackedHwnd in group.windows {
+            if (trackedHwnd == hwnd)
+                return procName
+        }
+    }
+    return ""
+}
+
+;==============================================================================
+; Tray callback (WM_TRAYCALLBACK)
+;==============================================================================
+OnTrayMessage(wParam, lParam, msg, hwnd) {
+    global Groups, WM_LBUTTONUP, WM_RBUTTONUP, WM_CONTEXTMENU
+
+    uid := wParam
+    event := lParam & 0xFFFF  ; low word is the mouse event
+
+    ; Find the group with this trayUid
+    foundProcName := ""
+    for procName, group in Groups {
+        if (group.trayUid == uid) {
+            foundProcName := procName
+            break
+        }
+    }
+    if (foundProcName == "")
+        return
+
+    group := Groups[foundProcName]
+
+    if (event == WM_LBUTTONUP) {
+        ; Pop the top of the stack and restore
+        if (group.windows.Length == 0) {
+            DestroyGroup(foundProcName)
+            return
+        }
+        targetHwnd := group.windows.Pop()
+        try {
+            WinShow("ahk_id " targetHwnd)
+            WinActivate("ahk_id " targetHwnd)
+        }
+        ; If stack now empty, destroy group; else update tooltip
+        if (group.windows.Length == 0)
+            DestroyGroup(foundProcName)
+        else
+            UpdateGroupTooltip(foundProcName)
+        return
+    }
+
+    if (event == WM_RBUTTONUP || event == WM_CONTEXTMENU) {
+        ShowGroupMenu(foundProcName)
+        return
+    }
+}
+
+ShowGroupMenu(procName) {
+    global Groups
+    if (!Groups.Has(procName))
+        return
+    group := Groups[procName]
+
+    groupMenu := Menu()
+    ; Per-window items, top of stack first
+    i := group.windows.Length
+    while (i >= 1) {
+        hwnd := group.windows[i]
+        title := ""
+        try title := WinGetTitle("ahk_id " hwnd)
+        if (title == "")
+            title := "(no title)"
+        ; Truncate long titles for menu sanity
+        if (StrLen(title) > 80)
+            title := SubStr(title, 1, 77) . "..."
+        groupMenu.Add(title, RestoreSpecific.Bind(procName, hwnd))
+        i--
+    }
+    groupMenu.Add()  ; separator
+    groupMenu.Add("Restore &All", RestoreAll.Bind(procName))
+    groupMenu.Add("Close A&ll",   CloseAll.Bind(procName))
+    groupMenu.Show()
+}
+
+;==============================================================================
+; Orphan cleanup - event-driven via SetWinEventHook(EVENT_OBJECT_DESTROY)
+;==============================================================================
+OnWinEvent(hHook, event, hwnd, idObject, idChild, idEventThread, dwmsEventTime) {
+    global Groups, OBJID_WINDOW, CHILDID_SELF
+
+    ; Filter: only top-level window destroys, not their child object destroys
+    if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF)
+        return
+
+    procName := HwndToGroup(hwnd)
+    if (procName == "")
+        return
+
+    group := Groups[procName]
+    for i, h in group.windows {
+        if (h == hwnd) {
+            group.windows.RemoveAt(i)
+            break
+        }
+    }
+
+    if (group.windows.Length == 0)
+        DestroyGroup(procName)
+    else
+        UpdateGroupTooltip(procName)
+}
+
+;==============================================================================
+; OnExit cleanup - restore every hidden window before quitting
+;==============================================================================
+Cleanup(reason, code) {
+    global Groups, hWinEventHook
+
+    ; Unhook the WinEvent listener first so destroy events during cleanup do not double-fire.
+    if (hWinEventHook) {
+        DllCall("UnhookWinEvent", "Ptr", hWinEventHook)
+        hWinEventHook := 0
+    }
+
+    for procName, group in Groups {
+        for hwnd in group.windows {
+            try WinShow("ahk_id " hwnd)
+        }
+        if (group.hIcon)
+            DllCall("DestroyIcon", "Ptr", group.hIcon)
+        ShellNotifyDelete(group.trayUid)
+    }
+    Groups.Clear()
+}

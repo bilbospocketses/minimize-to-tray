@@ -1,0 +1,30 @@
+# Dependabot version updates for minimize-to-tray.
+#
+# Security updates are handled separately by Dependabot security alerts
+# (enabled via repo Settings -> Code security and analysis). This file covers
+# routine non-security version bumps.
+#
+# Two ecosystems wired:
+#   - nuget: covers updater-helper/UpdaterHelper.csproj (Velopack SDK and
+#     transitive .NET runtime packages). Dependabot auto-discovers csproj
+#     files under the root.
+#   - github-actions: maintains SHA-pinned action refs in
+#     .github/workflows/*.yml. Upstream actions tag new versions periodically;
+#     without this Dependabot would never bump our pins and we'd drift on
+#     security fixes shipped in the actions themselves.
+#
+# Weekly cadence keeps PR noise manageable for a solo-owned repo.
+
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

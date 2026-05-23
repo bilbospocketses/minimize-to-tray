@@ -1,0 +1,7 @@
+# Catch-all owner. Informational + future-proofing only.
+#
+# The branch ruleset for `main` does NOT enable `require_code_owner_review`,
+# because GitHub blocks self-approval and that would deadlock solo self-merge.
+# This file exists so future contributors / drive-by PRs know who reviews.
+
+* @bilbospocketses

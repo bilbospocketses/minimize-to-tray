@@ -1,0 +1,60 @@
+# CI: build smoke on every push to main and every PR targeting main.
+#
+# This workflow enables the `required_status_checks` rule on the main branch
+# ruleset (rule references the `build-and-test` job context). Without this
+# workflow existing and running, the rule would block ALL pushes to main
+# because the required check would never report.
+#
+# What this job does:
+#   1. Restore dotnet-tools (pins vpk per dotnet-tools.json).
+#   2. Run build.ps1, which chains:
+#        - Ahk2Exe (vendored under dependencies/) compiles minimize-to-tray.ahk
+#        - dotnet publish compiles updater-helper (self-contained single-file)
+#        - vpk pack produces the Velopack Setup.exe + .nupkg + Portable.zip
+#   3. Upload dist/ as an artifact for inspection.
+#
+# There's no separate test suite (AHK has no standard test framework that
+# justifies the setup cost for a single ~400-line script). The build chain
+# itself is the smoke: if vpk pack succeeds, all three sub-steps succeeded.
+#
+# All actions are SHA-pinned per the repo-level `sha_pinning_required`
+# enforcement. Trailing `# vX.Y.Z` comments are PRECISE (never bare `# v4`)
+# so Dependabot's github-actions ecosystem tracks future major bumps
+# correctly. SHAs reference COMMIT objects (not annotated-tag objects) per
+# the OpenSSF Scorecard / Sigstore "imposter commit" verifier behavior.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        with:
+          dotnet-version: 10.x
+
+      - name: Restore dotnet local tools (vpk)
+        run: dotnet tool restore
+
+      - name: Build via build.ps1
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Upload Velopack artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: velopack-bundle
+          path: dist/
+          retention-days: 14

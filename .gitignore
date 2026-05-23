@@ -1,0 +1,24 @@
+# Build output
+dist/
+
+# .NET build artifacts (updater-helper)
+**/bin/
+**/obj/
+
+# AHK auto-saved backups
+*.ahk.bak
+
+# Editor cruft
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS cruft
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Scratch
+scratch/
+*.local.*
