@@ -235,6 +235,9 @@ Initialize() {
             try RegWrite(themeState, "REG_SZ", APP_REG_KEY, APP_THEME_REG_VALUE)
     }
 
+    ; v1.0.7: surface any windows orphaned by a prior crashed session.
+    RescueOrphanedWindows()
+
     ; Register destroy hook for orphan cleanup.
     ; No "F" (Fast) option - we want the callback marshaled to AHK's main thread
     ; before we touch Groups / call Shell_NotifyIcon.
@@ -1387,4 +1390,58 @@ HiddenState_Remove(hwnd) {
             survivors.Push(entry)
     }
     HiddenState_AtomicWrite(JsonEncodeHiddenState(survivors))
+}
+
+RescueOrphanedWindows() {
+    ; Read tracked entries, validate each against current Windows state, prune stale.
+    ; If any survivors remain, present the modal rescue dialog. Called once during
+    ; Initialize() before tray-icon registration.
+    entries := HiddenState_Read()
+    if (entries.Length == 0)
+        return
+
+    survivors := []
+    for entry in entries {
+        ; Window still exists?
+        if (!DllCall("IsWindow", "Ptr", entry.hwnd, "Int"))
+            continue
+        ; Same process?
+        try {
+            currentPid := WinGetPID("ahk_id " entry.hwnd)
+        } catch {
+            continue
+        }
+        if (currentPid != entry.pid)
+            continue
+        try {
+            currentPath := ProcessGetPath(currentPid)
+        } catch {
+            continue
+        }
+        if (currentPath != entry.procPath)
+            continue
+        ; Still hidden? (User may have restored it externally.)
+        if (DllCall("IsWindowVisible", "Ptr", entry.hwnd, "Int"))
+            continue
+        survivors.Push(entry)
+    }
+
+    ; Always rewrite the file so stale entries are pruned even if we show no dialog.
+    HiddenState_AtomicWrite(JsonEncodeHiddenState(survivors))
+
+    if (survivors.Length == 0)
+        return
+
+    ; Show modal (Task 10 wires this).
+    ShowRescueDialog(survivors)
+}
+
+ShowRescueDialog(survivors) {
+    ; TASK-10-STUB: real implementation in Task 10. For now, MsgBox the count so we
+    ; can prove RescueOrphanedWindows runs during Initialize.
+    MsgBox("Found " survivors.Length " hidden window(s) from a previous session.",
+           "minimize-to-tray - rescue (stub)", "OK Iconi")
+    ; Don't restore here - the real dialog handles that. Just clear to avoid
+    ; re-prompting on next launch during this transient stub phase.
+    HiddenState_Clear()
 }
