@@ -1143,11 +1143,14 @@ Cleanup(reason, code) {
 ;==============================================================================
 LogRescue(message) {
     ; Append a timestamped line to rescue.log. Best-effort - never throws.
+    ; Strip embedded newlines from message so multi-line content (window titles,
+    ; exception messages) doesn't split a single record into multiple log lines.
     global RESCUE_LOG_FILE
     if (RESCUE_LOG_FILE == "")
         return
     try {
-        line := FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ") " " message "`n"
+        clean := StrReplace(StrReplace(message, "`r", ""), "`n", " ")
+        line  := FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ") " " clean "`n"
         FileAppend(line, RESCUE_LOG_FILE, "UTF-8")
     }
 }
