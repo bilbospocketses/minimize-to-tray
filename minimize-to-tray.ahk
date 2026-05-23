@@ -1154,3 +1154,34 @@ LogRescue(message) {
         FileAppend(line, RESCUE_LOG_FILE, "UTF-8")
     }
 }
+
+JsonEscapeString(s) {
+    ; Escape backslashes, quotes, and control chars per JSON spec.
+    s := StrReplace(s, "\", "\\")
+    s := StrReplace(s, '"', '\"')
+    s := StrReplace(s, "`r", "\r")
+    s := StrReplace(s, "`n", "\n")
+    s := StrReplace(s, "`t", "\t")
+    s := StrReplace(s, Chr(8),  "\b")
+    s := StrReplace(s, Chr(12), "\f")
+    return s
+}
+
+JsonEncodeHiddenState(windows) {
+    ; Minified output. windows is an Array of objects with hwnd/pid/procName/procPath/title/hiddenAt.
+    parts := []
+    for entry in windows {
+        obj :=  '{"hwnd":'        entry.hwnd
+            .   ',"pid":'         entry.pid
+            .   ',"procName":"'   JsonEscapeString(entry.procName) '"'
+            .   ',"procPath":"'   JsonEscapeString(entry.procPath) '"'
+            .   ',"title":"'      JsonEscapeString(entry.title)    '"'
+            .   ',"hiddenAt":"'   JsonEscapeString(entry.hiddenAt) '"}'
+        parts.Push(obj)
+    }
+    body := ""
+    for i, p in parts {
+        body .= (i > 1 ? "," : "") p
+    }
+    return '{"version":1,"windows":[' body "]}"
+}
