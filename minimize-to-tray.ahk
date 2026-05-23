@@ -55,7 +55,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.2"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.3"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
@@ -72,10 +72,18 @@ global RUN_MENU_LABEL    := "&Run on login"
 global runOnLoginState   := 0           ; in-process truth; seeded from registry at init
 global aboutRunOnLoginCb := 0           ; About-dialog checkbox handle (or 0 when dialog closed)
 
-; App-scoped registry key for first-run signaling between the Velopack install
-; hook and the first normal launch (used by v1.0.2's "show About after install").
+; Light/Dark theme state. Same source-of-truth pattern as Run-on-login: in-process
+; global seeded from registry at init, mirrored to registry on toggle when compiled.
+global themeState        := "light"     ; "light" | "dark"; seeded in Initialize()
+global aboutThemeIcon    := 0           ; About-dialog theme-toggle Text handle (or 0 when closed)
+global aboutControlRefs  := ""          ; Map(role -> Gui.Control) populated in ShowAbout
+
+; App-scoped registry key. Values stored here:
+;   FirstRunPending  (REG_DWORD)  v1.0.2: signals "show About on first launch after install"
+;   Theme            (REG_SZ)     v1.0.3: "light" | "dark", current theme state
 global APP_REG_KEY                 := "HKEY_CURRENT_USER\Software\bilbospocketses\minimize-to-tray"
 global FIRST_RUN_PENDING_REG_VALUE := "FirstRunPending"
+global APP_THEME_REG_VALUE         := "Theme"
 
 ;==============================================================================
 ; Triggers
@@ -101,10 +109,12 @@ MButton::MinimizeUnderCursor()
 ; doesn't keep trying to launch a no-longer-installed exe at login.
 for arg in A_Args {
     if (arg = "--veloapp-install") {
-        ; Fresh install: default Run-on-login ON, and set a first-run marker so
-        ; the normal-launch path that follows will surface the About dialog once
-        ; (giving the user a chance to opt out of Run-on-login immediately).
+        ; Fresh install: default Run-on-login ON, seed Theme from the Windows Apps
+        ; theme, and set a first-run marker so the normal-launch path that follows
+        ; will surface the About dialog once (giving the user a chance to opt out
+        ; of Run-on-login immediately and see the seeded theme).
         try RegWrite(A_ScriptFullPath, "REG_SZ", RUN_REG_KEY, RUN_REG_VALUE)
+        try RegWrite(ReadWindowsAppsTheme(), "REG_SZ", APP_REG_KEY, APP_THEME_REG_VALUE)
         try RegWrite(1, "REG_DWORD", APP_REG_KEY, FIRST_RUN_PENDING_REG_VALUE)
         ExitApp 0
     }
@@ -184,6 +194,16 @@ Initialize() {
     runOnLoginState := ReadRegistryRunOnLogin()
     UpdateRunOnLoginUI()
 
+    ; Seed theme state. Compiled installs are seeded by --veloapp-install; existing
+    ; pre-v1.0.3 users get a one-time seed from the Windows Apps theme on first run.
+    global themeState
+    themeState := ReadRegistryTheme()
+    if (themeState = "") {
+        themeState := ReadWindowsAppsTheme()
+        if (A_IsCompiled)
+            try RegWrite(themeState, "REG_SZ", APP_REG_KEY, APP_THEME_REG_VALUE)
+    }
+
     ; Register destroy hook for orphan cleanup.
     ; No "F" (Fast) option - we want the callback marshaled to AHK's main thread
     ; before we touch Groups / call Shell_NotifyIcon.
@@ -240,6 +260,28 @@ ReadRegistryRunOnLogin() {
     }
 }
 
+ReadRegistryTheme() {
+    ; Returns "light" | "dark" if the Theme value is present and valid, else "".
+    global APP_REG_KEY, APP_THEME_REG_VALUE
+    try {
+        val := RegRead(APP_REG_KEY, APP_THEME_REG_VALUE)
+        if (val = "light" || val = "dark")
+            return val
+    }
+    return ""
+}
+
+ReadWindowsAppsTheme() {
+    ; Returns "light" | "dark" based on the Windows Apps theme registry value.
+    ; Falls back to "light" if AppsUseLightTheme is missing (some imaged installs).
+    try {
+        v := RegRead("HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme")
+        return (v = 0) ? "dark" : "light"
+    } catch {
+        return "light"
+    }
+}
+
 SetRunOnLogin(enabled) {
     global runOnLoginState, RUN_REG_KEY, RUN_REG_VALUE
     runOnLoginState := enabled ? 1 : 0
@@ -283,6 +325,99 @@ OnAboutRunOnLoginToggle(ctrl, *) {
 }
 
 ;==============================================================================
+; Light/Dark theme - palette + live apply
+;==============================================================================
+GetThemePalette(name) {
+    if (name = "dark") {
+        return {
+            bg:         "1F1F1F",
+            title:      "F2F2F2",
+            version:    "A0A0A0",
+            shortcut:   "F2F2F2",
+            italic:     "B8B8B8",
+            url:        "4DA3FF",
+            checkbox:   "F2F2F2",
+            okButton:   "F2F2F2",
+            themeGlyph: ""           ; emoji moon is color-locked; tint is ignored
+        }
+    }
+    return {
+        bg:         "FFFFFF",
+        title:      "000000",
+        version:    "707070",
+        shortcut:   "000000",
+        italic:     "606060",
+        url:        "0066CC",
+        checkbox:   "000000",
+        okButton:   "000000",
+        themeGlyph: "D9A300"          ; gold sun
+    }
+}
+
+ApplyThemeToAbout() {
+    ; Live re-style of the About dialog. No-op when the dialog isn't open.
+    global aboutGui, aboutControlRefs, aboutThemeIcon, themeState
+    if (!aboutGui || !IsObject(aboutGui))
+        return
+
+    pal := GetThemePalette(themeState)
+    try aboutGui.BackColor := pal.bg
+
+    if (IsObject(aboutControlRefs)) {
+        for role, ctrl in aboutControlRefs {
+            if (!IsObject(ctrl))
+                continue
+            color := pal.%role%
+            if (color != "") {
+                try ctrl.Opt("c" color)
+                try ctrl.Redraw()
+            }
+        }
+    }
+
+    ; Swap the theme-icon glyph + color
+    if (IsObject(aboutThemeIcon)) {
+        if (themeState = "dark") {
+            try aboutThemeIcon.Text := Chr(0x1F319)   ; crescent-moon emoji
+        } else {
+            try aboutThemeIcon.Text := Chr(0x2600)    ; classic sun
+        }
+        if (pal.themeGlyph != "")
+            try aboutThemeIcon.Opt("c" pal.themeGlyph)
+        try aboutThemeIcon.Redraw()
+    }
+
+    ; Tell DWM to draw the OS title bar in the matching theme. Without this the
+    ; title bar stays Light even when the app body goes Dark. Attribute 20 =
+    ; DWMWA_USE_IMMERSIVE_DARK_MODE, supported on Win10 19041+ and all Win11.
+    SetAboutTitleBarDark(themeState = "dark")
+
+    ; Force a top-level repaint so the BackColor change is visible immediately
+    try aboutGui.Show("NoActivate")
+}
+
+SetAboutTitleBarDark(isDark) {
+    global aboutGui
+    if (!aboutGui || !IsObject(aboutGui))
+        return
+    val := isDark ? 1 : 0
+    try DllCall("dwmapi\DwmSetWindowAttribute"
+        , "Ptr",  aboutGui.Hwnd
+        , "UInt", 20             ; DWMWA_USE_IMMERSIVE_DARK_MODE
+        , "Int*", val
+        , "UInt", 4)             ; sizeof(BOOL)
+}
+
+ToggleTheme(*) {
+    global themeState, APP_REG_KEY, APP_THEME_REG_VALUE
+    themeState := (themeState = "light") ? "dark" : "light"
+    if (A_IsCompiled) {
+        try RegWrite(themeState, "REG_SZ", APP_REG_KEY, APP_THEME_REG_VALUE)
+    }
+    ApplyThemeToAbout()
+}
+
+;==============================================================================
 ; About menu - custom Gui with pulsing blue update-available dot
 ;==============================================================================
 ; A global handle so the pulse timer can reach the live Gui control.
@@ -292,6 +427,8 @@ global pulseTimer  := 0
 
 ShowAbout(*) {
     global aboutGui, aboutDot, pulseTimer, APP_VERSION, UpdateAvailable, UpdateVersion
+    global aboutThemeIcon, aboutControlRefs, themeState
+    aboutControlRefs := Map()
 
     ; If a previous About is still showing, just bring it forward.
     if (aboutGui && IsObject(aboutGui)) {
@@ -335,29 +472,41 @@ ShowAbout(*) {
         aboutGui.Add("Picture", Format("x{1} y{2} w{3} h{3}", imgX, imgY, imgSize), appImagePath)
 
     aboutGui.SetFont("s16 Bold c000000", "Segoe UI")
-    aboutGui.Add("Text", Format("x{1} y{2} w{3} Center", textStartX, titleY, textBlockW), "minimize-to-tray")
+    aboutControlRefs["title"] := aboutGui.Add("Text", Format("x{1} y{2} w{3} Center", textStartX, titleY, textBlockW), "minimize-to-tray")
 
     aboutGui.SetFont("s9 Norm c707070", "Segoe UI")
-    aboutGui.Add("Text", Format("x{1} y+4 w{2} Center", textStartX, textBlockW), "v" APP_VERSION)
+    aboutControlRefs["version"] := aboutGui.Add("Text", Format("x{1} y+4 w{2} Center", textStartX, textBlockW), "v" APP_VERSION)
 
-    ; Pulsing dot at the top-right CORNER (decoupled from the title row vertically).
-    ; Sits well above the title with comfortable top + right padding from the dialog
-    ; corner, so it reads as a notification-style indicator rather than something
-    ; squished next to the title.
+    ; Top-right corner controls. Layout (left -> right):
+    ;   [optional update dot]  [theme toggle]
+    ; The theme toggle is ALWAYS present. The update dot is only created when
+    ; an update is available, and slides 44px to the left of the theme icon.
+    iconW       := 32
+    rightEdge   := 28 + contentW
+    themeIconX  := rightEdge - iconW + 20    ; same x as the old top-right dot
+    themeIconY  := 4
+
+    ; Update dot first (if applicable), so the visual left-to-right order matches.
     if (UpdateAvailable) {
-        dotW       := 32
-        rightEdge  := 28 + contentW
-        dotX       := rightEdge - dotW + 20     ; 20px further right (extends into MarginX, dialog grows ~20px)
-        dotY       := 4                         ; 4px below dialog top - tucked into the corner
+        dotX := themeIconX - iconW - 12      ; 12px gap to the left of theme icon
+        dotY := themeIconY
         aboutGui.SetFont("s22 Bold cBlue", "Segoe UI Symbol")
-        aboutDot := aboutGui.Add("Text", Format("x{1} y{2} w{3} h36 Center", dotX, dotY, dotW), Chr(9679))
+        aboutDot := aboutGui.Add("Text", Format("x{1} y{2} w{3} h36 Center", dotX, dotY, iconW), Chr(9679))
         aboutDot.OnEvent("Click", OnClickUpdateDot)
         pulseTimer := PulseDot
         SetTimer(pulseTimer, 40)
-        ; Cursor-on-control polling drives the hover tooltip (Text controls don't fire
-        ; a MouseEnter event, so we sample MouseGetPos at 100ms instead).
-        SetTimer(UpdateDotTooltip, 100)
     }
+
+    ; Theme toggle (always present). Glyph + tint reflect current themeState;
+    ; ApplyThemeToAbout (called at the end of ShowAbout) normalizes both, so the
+    ; literal here just needs the right initial character.
+    initialGlyph := (themeState = "dark") ? Chr(0x1F319) : Chr(0x2600)
+    aboutGui.SetFont("s22 Bold cD9A300", "Segoe UI Symbol")
+    aboutThemeIcon := aboutGui.Add("Text", Format("x{1} y{2} w{3} h36 Center", themeIconX, themeIconY, iconW), initialGlyph)
+    aboutThemeIcon.OnEvent("Click", ToggleTheme)
+
+    ; Single polling routine for both the dot and theme-icon hover tooltips.
+    SetTimer(UpdateAboutHoverTooltips, 100)
 
     ; ---- Shortcut block ----
     ; Bumped down ~20px from the previous layout (request: more breathing room between
@@ -365,11 +514,11 @@ ShowAbout(*) {
     ; is decoupled from the version control's y+N flow.
     shortcutY := imgY + imgSize + 24   ; image bottom + 24px breathing gap
     aboutGui.SetFont("s11 Norm c000000", "Segoe UI")
-    aboutGui.Add("Text", Format("x28 y{1} w{2} Center", shortcutY, contentW),
+    aboutControlRefs["shortcut"] := aboutGui.Add("Text", Format("x28 y{1} w{2} Center", shortcutY, contentW),
                  "Win+Shift+Z   |   or   |   Middle-click on a title bar")
 
     aboutGui.SetFont("s10 Italic c606060", "Segoe UI")
-    aboutGui.Add("Text", Format("x28 y+8 w{1} Center", contentW),
+    aboutControlRefs["italic"] := aboutGui.Add("Text", Format("x28 y+8 w{1} Center", contentW),
                  "minimize focused window to tray")
 
     ; ---- Run on login (centered checkbox above the URL) ----
@@ -385,6 +534,7 @@ ShowAbout(*) {
     aboutRunOnLoginCb.OnEvent("Click", OnAboutRunOnLoginToggle)
     aboutRunOnLoginCb.GetPos(, &cbY, &cbW, )
     aboutRunOnLoginCb.Move(28 + (contentW - cbW) // 2, cbY)
+    aboutControlRefs["checkbox"] := aboutRunOnLoginCb
 
     ; ---- Footer (clickable URL + OK) ----
     ; URL styled as a link (blue + underline). Click opens in default browser.
@@ -392,24 +542,30 @@ ShowAbout(*) {
     aboutGui.SetFont("s9 Norm c0066CC Underline", "Segoe UI")
     urlCtrl := aboutGui.Add("Text", Format("x28 y+12 w{1} Center", contentW), githubUrl)
     urlCtrl.OnEvent("Click", (*) => Run(githubUrl))
+    aboutControlRefs["url"] := urlCtrl
 
     okX := 28 + (contentW - 96) // 2
     aboutGui.SetFont("s9 Norm c000000", "Segoe UI")
-    aboutGui.Add("Button", Format("x{1} y+12 w96 h28 Default", okX), "OK")
-            .OnEvent("Click", (*) => CloseAbout())
+    okBtn := aboutGui.Add("Button", Format("x{1} y+12 w96 h28 Default", okX), "OK")
+    okBtn.OnEvent("Click", (*) => CloseAbout())
+    aboutControlRefs["okButton"] := okBtn
+
     aboutGui.OnEvent("Close",  (*) => CloseAbout())
     aboutGui.OnEvent("Escape", (*) => CloseAbout())
+
+    ; Initial theme paint - applies background + per-control colors before show.
+    ApplyThemeToAbout()
 
     aboutGui.Show("AutoSize Center")
 }
 
 CloseAbout() {
-    global aboutGui, aboutDot, pulseTimer, aboutRunOnLoginCb
+    global aboutGui, aboutDot, pulseTimer, aboutRunOnLoginCb, aboutThemeIcon, aboutControlRefs
     if (pulseTimer) {
         SetTimer(pulseTimer, 0)
         pulseTimer := 0
     }
-    SetTimer(UpdateDotTooltip, 0)
+    SetTimer(UpdateAboutHoverTooltips, 0)
     ToolTip()    ; dismiss any lingering hover tooltip
     if (aboutGui && IsObject(aboutGui)) {
         try aboutGui.Destroy()
@@ -417,42 +573,58 @@ CloseAbout() {
     aboutGui := 0
     aboutDot := 0
     aboutRunOnLoginCb := 0
+    aboutThemeIcon := 0
+    aboutControlRefs := ""
 }
 
-UpdateDotTooltip() {
-    global aboutGui, aboutDot, UpdateAvailable, UpdateVersion
-    static showing := false
+UpdateAboutHoverTooltips() {
+    ; Single polling routine for all About-dialog hover tooltips. Tracks which
+    ; control (if any) the cursor is over; shows the matching tooltip; dismisses
+    ; on leave. Used by both the update dot and the theme toggle - AHK Text
+    ; controls don't fire MouseEnter events, so we sample MouseGetPos at 100ms.
+    global aboutGui, aboutDot, aboutThemeIcon, UpdateAvailable, UpdateVersion, themeState
+    static showing := ""   ; "" | "dot" | "theme"
 
-    if (!aboutGui || !IsObject(aboutGui) || !aboutDot || !IsObject(aboutDot) || !UpdateAvailable) {
-        if (showing) {
+    if (!aboutGui || !IsObject(aboutGui)) {
+        if (showing != "") {
             ToolTip()
-            showing := false
+            showing := ""
         }
         return
     }
 
     try {
-        MouseGetPos(, , , &ctrlHwnd, 2)   ; flag 2 = report control hwnd under cursor
+        MouseGetPos(, , , &ctrlHwnd, 2)
     } catch {
         ctrlHwnd := 0
     }
 
-    if (ctrlHwnd == aboutDot.Hwnd) {
-        if (!showing) {
-            ToolTip(
-                "Update available: v" UpdateVersion "`n"
-              . "Click to download and install.`n`n"
-              . "minimize-to-tray`n"
-              . "Win+Shift+Z or`n"
-              . "Middle-click title bar`n"
-              . "minimizes focused window to tray"
-            )
-            showing := true
-        }
-    } else if (showing) {
-        ToolTip()
-        showing := false
+    target := ""
+    if (UpdateAvailable && IsObject(aboutDot) && ctrlHwnd == aboutDot.Hwnd) {
+        target := "dot"
+    } else if (IsObject(aboutThemeIcon) && ctrlHwnd == aboutThemeIcon.Hwnd) {
+        target := "theme"
     }
+
+    if (target = showing)
+        return
+
+    if (target = "dot") {
+        ToolTip(
+            "Update available: v" UpdateVersion "`n"
+          . "Click to download and install.`n`n"
+          . "minimize-to-tray`n"
+          . "Win+Shift+Z or`n"
+          . "Middle-click title bar`n"
+          . "minimizes focused window to tray"
+        )
+    } else if (target = "theme") {
+        otherTheme := (themeState = "light") ? "Dark" : "Light"
+        ToolTip("Switch to " otherTheme " theme")
+    } else {
+        ToolTip()
+    }
+    showing := target
 }
 
 PulseDot() {
