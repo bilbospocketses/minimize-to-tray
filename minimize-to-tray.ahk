@@ -55,7 +55,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.0"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.1"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
@@ -84,6 +84,26 @@ MButton::MinimizeUnderCursor()
 ;------------------------------------------------------------------------------
 ; Initialization
 ;------------------------------------------------------------------------------
+; Velopack lifecycle hook handler. Velopack invokes our main exe with
+;   --veloapp-install <ver>     first run after install
+;   --veloapp-updated <ver>     first run after update
+;   --veloapp-obsoleted <ver>   last run before being replaced by an update
+;   --veloapp-uninstall         last run before uninstall
+; The .NET SDK's VelopackApp.Build().Run() handles these automatically, but our
+; main exe is native AHK-compiled. We have to do it ourselves: detect any
+; --veloapp-* arg and exit cleanly so Velopack's installer doesn't report a
+; timeout. On uninstall, also wipe the Run-on-login registry entry so Windows
+; doesn't keep trying to launch a no-longer-installed exe at login.
+for arg in A_Args {
+    if (arg = "--veloapp-uninstall") {
+        try RegDelete(RUN_REG_KEY, RUN_REG_VALUE)
+        ExitApp 0
+    }
+    if (SubStr(arg, 1, 10) = "--veloapp-") {
+        ExitApp 0
+    }
+}
+
 ; Dev-only flag for smoke-testing the pulsing dot without a real update.
 ; Pass /devshowdot on the command line to force UpdateAvailable := true.
 for arg in A_Args {
