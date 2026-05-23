@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-05-23
+
+### Added
+- Light / Dark theme toggle in the About dialog. Click the sun ☀ / moon 🌙 glyph in the top-right corner to flip; the dialog re-styles live (no reopen). Theme persists across launches at `HKCU\Software\bilbospocketses\minimize-to-tray\Theme`.
+- Fresh installs seed the initial theme from the user's Windows Apps theme (`HKCU\...\Themes\Personalize\AppsUseLightTheme`) via the `--veloapp-install` hook. Existing v1.0.0 / v1.0.1 / v1.0.2 users updating to v1.0.3 get a one-time seed from the Windows theme on first launch and persist it.
+- When the update-available blue dot is present, it now sits to the **left** of the theme toggle (12px gap) instead of in the top-right corner.
+
+### Changed
+- Native Checkbox (Run on login) and OK Button get best-effort label recoloring across themes; their box/button rendering stays Windows-native (documented out of scope for v1.0.3).
+
 ## [1.0.2] - 2026-05-23
 
 ### Added
@@ -42,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo hardened to CM-parity security baseline per the lockdown protocol: Dependabot alerts + automated security updates + secret scanning + push protection + Private Vulnerability Reporting all enabled. Actions allowlist active with `sha_pinning_required: true`. Squash-only merge policy. Branch ruleset on `main`: required signatures + linear history + PR-only changes + required status checks (`build-and-test` + `Scorecard analysis`). Tag ruleset on `refs/tags/v*`: required signatures + non-fast-forward + no deletion.
 - All workflow actions SHA-pinned to commit objects with precise `# vX.Y.Z` comments per the OpenSSF Scorecard imposter-commit verifier + Dependabot version-tracking lessons.
 
-[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.3
 [1.0.2]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.2
 [1.0.1]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.1
 [1.0.0]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.0

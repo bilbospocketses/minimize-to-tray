@@ -10,7 +10,7 @@
 
     <AssemblyName>updater-helper</AssemblyName>
     <RootNamespace>MinimizeToTray.UpdaterHelper</RootNamespace>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <Authors>Jamie Chapman</Authors>
     <Product>minimize-to-tray updater-helper</Product>
     <Description>Velopack update helper for minimize-to-tray. Invoked by the AHK script to check and apply updates.</Description>
