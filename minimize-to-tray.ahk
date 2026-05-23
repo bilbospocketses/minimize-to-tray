@@ -55,7 +55,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.4"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.5"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
@@ -701,7 +701,36 @@ CheckForUpdateAsync() {
     if (exitCode == 0 && result != "" && result != APP_VERSION) {
         UpdateAvailable := true
         UpdateVersion := result
+        ; v1.0.5: if About is currently open, inject the dot live so the user
+        ; sees it without having to close + reopen the dialog.
+        AddUpdateDotToAbout()
     }
+}
+
+AddUpdateDotToAbout() {
+    ; Live-inject the pulsing blue update dot into an already-open About dialog.
+    ; No-op if About isn't open, the dot already exists, or the theme icon
+    ; (which anchors the dot's position) is missing. The hover-tooltip polling
+    ; routine picks up the new dot automatically because it re-resolves
+    ; aboutDot.Hwnd on every tick.
+    global aboutGui, aboutDot, aboutThemeIcon, pulseTimer
+    if (!aboutGui || !IsObject(aboutGui))
+        return
+    if (aboutDot && IsObject(aboutDot))
+        return
+    if (!aboutThemeIcon || !IsObject(aboutThemeIcon))
+        return
+
+    iconW := 32
+    aboutThemeIcon.GetPos(&tX, &tY, , )
+    dotX := tX - iconW - 12     ; 12px gap to the left of the theme icon
+    dotY := tY
+
+    aboutGui.SetFont("s22 Bold cBlue", "Segoe UI Symbol")
+    aboutDot := aboutGui.Add("Text", Format("x{1} y{2} w{3} h36 Center", dotX, dotY, iconW), Chr(9679))
+    aboutDot.OnEvent("Click", OnClickUpdateDot)
+    pulseTimer := PulseDot
+    SetTimer(pulseTimer, 40)
 }
 
 ;==============================================================================

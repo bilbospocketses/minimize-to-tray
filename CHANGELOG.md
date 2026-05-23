@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-05-23
+
+### Added
+- Update-available blue dot is now live-injected into an already-open About dialog when the update check (fired either at startup or on About open) detects a newer release. Previously, the dot only appeared on the NEXT About open after a positive check. New `AddUpdateDotToAbout()` helper bails cleanly if About isn't open, the dot is already present, or the theme icon (which anchors the dot's position) is missing.
+
 ## [1.0.4] - 2026-05-23
 
 ### Fixed
@@ -60,7 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo hardened to CM-parity security baseline per the lockdown protocol: Dependabot alerts + automated security updates + secret scanning + push protection + Private Vulnerability Reporting all enabled. Actions allowlist active with `sha_pinning_required: true`. Squash-only merge policy. Branch ruleset on `main`: required signatures + linear history + PR-only changes + required status checks (`build-and-test` + `Scorecard analysis`). Tag ruleset on `refs/tags/v*`: required signatures + non-fast-forward + no deletion.
 - All workflow actions SHA-pinned to commit objects with precise `# vX.Y.Z` comments per the OpenSSF Scorecard imposter-commit verifier + Dependabot version-tracking lessons.
 
-[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.5...HEAD
+[1.0.5]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.5
 [1.0.4]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.4
 [1.0.3]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.3
 [1.0.2]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.2
