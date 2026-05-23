@@ -1189,3 +1189,74 @@ JsonEncodeHiddenState(windows) {
     }
     return '{"version":1,"windows":[' body "]}"
 }
+
+JsonUnescapeString(s) {
+    s := StrReplace(s, "\\", Chr(1))         ; placeholder so we don't double-decode
+    s := StrReplace(s, '\"', '"')
+    s := StrReplace(s, "\r", "`r")
+    s := StrReplace(s, "\n", "`n")
+    s := StrReplace(s, "\t", "`t")
+    s := StrReplace(s, "\b", Chr(8))
+    s := StrReplace(s, "\f", Chr(12))
+    s := StrReplace(s, "\/", "/")
+    s := StrReplace(s, Chr(1), "\")           ; restore literal backslash
+    return s
+}
+
+JsonDecodeHiddenState(text) {
+    ; Returns Array of entries with .hwnd/.pid (Integer) and .procName/.procPath/.title/.hiddenAt (String).
+    ; Returns [] on any parse failure - we re-write fresh on next operation.
+    out := []
+    if (text == "")
+        return out
+    ; Find the "windows" array
+    pos := InStr(text, '"windows"')
+    if (!pos)
+        return out
+    pos := InStr(text, "[", , pos)
+    if (!pos)
+        return out
+    end := InStr(text, "]", , pos)
+    if (!end)
+        return out
+    body := SubStr(text, pos + 1, end - pos - 1)
+
+    ; Iterate object literals { ... }
+    p := 1
+    while (p <= StrLen(body)) {
+        objStart := InStr(body, "{", , p)
+        if (!objStart)
+            break
+        objEnd := InStr(body, "}", , objStart)
+        if (!objEnd)
+            break
+        obj := SubStr(body, objStart, objEnd - objStart + 1)
+        entry := ParseHiddenEntry(obj)
+        if (IsObject(entry))
+            out.Push(entry)
+        p := objEnd + 1
+    }
+    return out
+}
+
+ParseHiddenEntry(obj) {
+    ; obj is the text of a single { ... } literal. Extract known fields.
+    entry := { hwnd: 0, pid: 0, procName: "", procPath: "", title: "", hiddenAt: "" }
+    ; Integer fields
+    if RegExMatch(obj, '"hwnd"\s*:\s*(\d+)', &m)
+        entry.hwnd := Integer(m[1])
+    if RegExMatch(obj, '"pid"\s*:\s*(\d+)', &m)
+        entry.pid := Integer(m[1])
+    ; String fields (greedy match up to closing quote, respecting backslash escapes)
+    if RegExMatch(obj, '"procName"\s*:\s*"((?:\\.|[^"\\])*)"', &m)
+        entry.procName := JsonUnescapeString(m[1])
+    if RegExMatch(obj, '"procPath"\s*:\s*"((?:\\.|[^"\\])*)"', &m)
+        entry.procPath := JsonUnescapeString(m[1])
+    if RegExMatch(obj, '"title"\s*:\s*"((?:\\.|[^"\\])*)"', &m)
+        entry.title := JsonUnescapeString(m[1])
+    if RegExMatch(obj, '"hiddenAt"\s*:\s*"((?:\\.|[^"\\])*)"', &m)
+        entry.hiddenAt := JsonUnescapeString(m[1])
+    if (entry.hwnd == 0)
+        return ""    ; required field missing - drop entry
+    return entry
+}
