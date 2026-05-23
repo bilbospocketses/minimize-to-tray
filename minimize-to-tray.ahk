@@ -393,7 +393,8 @@ GetThemePalette(name) {
             buttonDefault:"4DA3FF",    ; v1.0.7: default-pushbutton accent border
             headerBg:     "2D2D2D",    ; v1.0.7: ListView header background
             headerFg:     "F2F2F2",    ; v1.0.7: ListView header text
-            focusRing:    "4DA3FF"     ; v1.0.7: focus-ring inside owner-drawn controls
+            focusRing:    "4DA3FF",    ; v1.0.7: focus-ring inside owner-drawn controls
+            gridLine:     "6E6E6E"     ; v1.0.7: rescue header grid separators (matches LV body grid in dark mode)
         }
     }
     return {
@@ -415,7 +416,8 @@ GetThemePalette(name) {
         buttonDefault:"0078D4",
         headerBg:     "F0F0F0",
         headerFg:     "000000",
-        focusRing:    "0078D4"
+        focusRing:    "0078D4",
+        gridLine:     "C8C8C8"        ; matches LV body grid in light mode
     }
 }
 
@@ -1563,33 +1565,55 @@ ShowRescueDialog(survivors) {
     ; Vertical column separators - 5 total to frame the header row + match LV grid:
     ;   * outer-left, outer-right (match LV's outer border)
     ;   * 3 column-end dividers (Process|Title, Title|Hidden, Hidden|phantom right gutter)
-    ; Positions derived from LVM_GETCOLUMNWIDTH (=0x101D) for pixel-accurate alignment
-    ; with the LV's auto-drawn grid lines.
     ;
-    ; CRITICAL: LVM_GETCOLUMNWIDTH returns DEVICE PIXELS, but AHK Gui coords use DIPs
-    ; (device-independent pixels). At any DPI != 100% the values differ by a factor of
-    ; A_ScreenDPI/96. Failing to convert puts verticals far off at HiDPI displays.
-    ; ModifyCol(N, w) takes DIPs and AHK scales internally to device pixels; the
-    ; round-trip is the conversion below.
+    ; AHK Gui DIP positioning rounds (lvX_dip + col_dip) * dpiScale to a device pixel.
+    ; The LV instead computes col_end_device = lvX_device + col_device (where col_device
+    ; is the raw LVM_GETCOLUMNWIDTH value). The two rounding paths can disagree by 1
+    ; device pixel, putting our DIP-positioned verticals slightly off the LV grid lines.
+    ;
+    ; Fix: add the verticals at placeholder positions, then SetWindowPos them in raw
+    ; device pixels using the same lvX_device + col_device math the LV uses internally.
+    ; Pixel-perfect alignment regardless of DPI rounding direction.
     LV.GetPos(&lvX, &lvY, &lvW, &lvH)
-    col1W := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 0, "Ptr", 0, "Int")
-    col2W := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 1, "Ptr", 0, "Int")
-    col3W := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 2, "Ptr", 0, "Int")
+    col1Wdev := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 0, "Ptr", 0, "Int")
+    col2Wdev := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 1, "Ptr", 0, "Int")
+    col3Wdev := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 2, "Ptr", 0, "Int")
     dpiScale := A_ScreenDPI / 96
-    col1W := Round(col1W / dpiScale)
-    col2W := Round(col2W / dpiScale)
-    col3W := Round(col3W / dpiScale)
 
     sepHorizTop.GetPos(&topX, &topY, &topW, &topH)
     sepHorizBottom.GetPos(&botX, &botY, &botW, &botH)
     vertY := topY
     vertH := (botY + botH) - topY
 
-    vertOuterL := rescueGui.AddText("x" lvX                              " y" vertY " w1 h" vertH, "")
-    vertCol1   := rescueGui.AddText("x" (lvX + col1W)                    " y" vertY " w1 h" vertH, "")
-    vertCol2   := rescueGui.AddText("x" (lvX + col1W + col2W)            " y" vertY " w1 h" vertH, "")
-    vertCol3   := rescueGui.AddText("x" (lvX + col1W + col2W + col3W)    " y" vertY " w1 h" vertH, "")
-    vertOuterR := rescueGui.AddText("x" (lvX + lvW - 1)                  " y" vertY " w1 h" vertH, "")
+    ; Placeholder positions - replaced by SetWindowPos below.
+    vertOuterL := rescueGui.AddText("xm yp w1 h1", "")
+    vertCol1   := rescueGui.AddText("xm yp w1 h1", "")
+    vertCol2   := rescueGui.AddText("xm yp w1 h1", "")
+    vertCol3   := rescueGui.AddText("xm yp w1 h1", "")
+    vertOuterR := rescueGui.AddText("xm yp w1 h1", "")
+
+    ; Device-pixel coordinates for SetWindowPos.
+    lvXdev   := Round(lvX * dpiScale)
+    lvWdev   := Round(lvW * dpiScale)
+    vertYdev := Round(vertY * dpiScale)
+    vertHdev := Round((vertY + vertH) * dpiScale) - vertYdev
+    SWP      := 0x0014   ; SWP_NOZORDER | SWP_NOACTIVATE
+
+    DllCall("SetWindowPos", "Ptr", vertOuterL.Hwnd, "Ptr", 0,
+        "Int", lvXdev,                                          "Int", vertYdev,
+        "Int", 1, "Int", vertHdev, "UInt", SWP)
+    DllCall("SetWindowPos", "Ptr", vertCol1.Hwnd,   "Ptr", 0,
+        "Int", lvXdev + col1Wdev,                                "Int", vertYdev,
+        "Int", 1, "Int", vertHdev, "UInt", SWP)
+    DllCall("SetWindowPos", "Ptr", vertCol2.Hwnd,   "Ptr", 0,
+        "Int", lvXdev + col1Wdev + col2Wdev,                     "Int", vertYdev,
+        "Int", 1, "Int", vertHdev, "UInt", SWP)
+    DllCall("SetWindowPos", "Ptr", vertCol3.Hwnd,   "Ptr", 0,
+        "Int", lvXdev + col1Wdev + col2Wdev + col3Wdev,          "Int", vertYdev,
+        "Int", 1, "Int", vertHdev, "UInt", SWP)
+    DllCall("SetWindowPos", "Ptr", vertOuterR.Hwnd, "Ptr", 0,
+        "Int", lvXdev + lvWdev - 1,                              "Int", vertYdev,
+        "Int", 1, "Int", vertHdev, "UInt", SWP)
 
     rescueGui.colSeparators := [sepHorizTop, sepHorizBottom,
                                  vertOuterL, vertCol1, vertCol2, vertCol3, vertOuterR]
@@ -1640,11 +1664,12 @@ ApplyThemeToRescue() {
         }
     }
 
-    ; Grid separators (vertical column dividers + horizontal under-header line). Filled
-    ; with pal.buttonBorder so they read as grid lines in both themes.
+    ; Grid separators (vertical column dividers + horizontal under-header line).
+    ; Uses pal.gridLine (separate from buttonBorder) tuned to match the LV body's
+    ; auto-drawn grid color in each theme.
     if (rescueGui.HasProp("colSeparators") && IsObject(rescueGui.colSeparators)) {
         for sep in rescueGui.colSeparators {
-            try sep.Opt("Background" pal.buttonBorder)
+            try sep.Opt("Background" pal.gridLine)
             try sep.Redraw()
         }
     }
