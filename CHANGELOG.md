@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-05-23
+
+### Added
+- `/devsimulateupdate` command-line flag: dev/smoke-test flag that short-circuits the helper call and flips `UpdateAvailable` on the next `CheckForUpdateAsync` tick (startup +5s OR on About open). Demonstrates the v1.0.5 live-inject behavior end-to-end without needing to publish a fake newer release. Companion to the existing `/devshowdot` flag (which forces the dot present from the first About open instead).
+
 ## [1.0.5] - 2026-05-23
 
 ### Added
@@ -65,7 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo hardened to CM-parity security baseline per the lockdown protocol: Dependabot alerts + automated security updates + secret scanning + push protection + Private Vulnerability Reporting all enabled. Actions allowlist active with `sha_pinning_required: true`. Squash-only merge policy. Branch ruleset on `main`: required signatures + linear history + PR-only changes + required status checks (`build-and-test` + `Scorecard analysis`). Tag ruleset on `refs/tags/v*`: required signatures + non-fast-forward + no deletion.
 - All workflow actions SHA-pinned to commit objects with precise `# vX.Y.Z` comments per the OpenSSF Scorecard imposter-commit verifier + Dependabot version-tracking lessons.
 
-[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.6...HEAD
+[1.0.6]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.6
 [1.0.5]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.5
 [1.0.4]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.4
 [1.0.3]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.3
