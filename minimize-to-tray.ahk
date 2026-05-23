@@ -911,6 +911,9 @@ RestoreSpecific(procName, hwnd, *) {
         WinShow("ahk_id " hwnd)
         WinActivate("ahk_id " hwnd)
     }
+    try HiddenState_Remove(hwnd)
+    catch as e
+        LogRescue("RestoreSpecific: HiddenState_Remove failed for hwnd=" hwnd ": " e.Message)
     if (group.windows.Length == 0)
         DestroyGroup(procName)
     else
@@ -930,6 +933,9 @@ RestoreAll(procName, *) {
             WinShow("ahk_id " hwnd)
             WinActivate("ahk_id " hwnd)
         }
+        try HiddenState_Remove(hwnd)
+        catch as e
+            LogRescue("RestoreAll: HiddenState_Remove failed for hwnd=" hwnd ": " e.Message)
         i--
     }
     group.windows := []
@@ -1116,6 +1122,9 @@ OnWinEvent(hHook, event, hwnd, idObject, idChild, idEventThread, dwmsEventTime) 
             break
         }
     }
+    try HiddenState_Remove(hwnd)
+    catch as e
+        LogRescue("OnWinEvent: HiddenState_Remove failed for hwnd=" hwnd ": " e.Message)
 
     if (group.windows.Length == 0)
         DestroyGroup(procName)
@@ -1144,6 +1153,9 @@ Cleanup(reason, code) {
         ShellNotifyDelete(group.trayUid)
     }
     Groups.Clear()
+
+    ; v1.0.7: every hidden window was just restored, so the rescue state is empty.
+    try HiddenState_Clear()
 }
 
 ;==============================================================================
