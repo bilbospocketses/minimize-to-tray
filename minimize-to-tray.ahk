@@ -1437,11 +1437,78 @@ RescueOrphanedWindows() {
 }
 
 ShowRescueDialog(survivors) {
-    ; TASK-10-STUB: real implementation in Task 10. For now, MsgBox the count so we
-    ; can prove RescueOrphanedWindows runs during Initialize.
-    MsgBox("Found " survivors.Length " hidden window(s) from a previous session.",
-           "minimize-to-tray - rescue (stub)", "OK Iconi")
-    ; Don't restore here - the real dialog handles that. Just clear to avoid
-    ; re-prompting on next launch during this transient stub phase.
-    HiddenState_Clear()
+    ; Build a theme-aware modal listing each orphaned window. User picks via
+    ; checkboxes; buttons commit or cancel. Survivors array is the validated
+    ; output of RescueOrphanedWindows.
+    global rescueGui, themeState
+
+    rescueGui := Gui("+Resize +MinSize640x280", "Restore hidden windows")
+    rescueGui.OnEvent("Close", OnRescueCancel)
+    rescueGui.OnEvent("Escape", OnRescueCancel)
+    rescueGui.MarginX := 14
+    rescueGui.MarginY := 14
+    rescueGui.SetFont("s10", "Segoe UI")
+
+    intro := "Found " survivors.Length " window"
+           . (survivors.Length == 1 ? "" : "s")
+           . " hidden by a previous session of minimize-to-tray.`n"
+           . "Uncheck any you want to leave hidden."
+    rescueGui.AddText("xm w612", intro)
+
+    LV := rescueGui.AddListView("xm w612 r10 +Checked +Grid",
+        ["Process", "Window title", "Hidden at"])
+    LV.ModifyCol(1, 130)
+    LV.ModifyCol(2, 380)
+    LV.ModifyCol(3, 80)
+
+    ; Stash survivor entries on the LV via a parallel array (LV row index -> entry).
+    rescueGui.entries := survivors
+    for entry in survivors {
+        timeShort := SubStr(entry.hiddenAt, 12, 5)   ; "HH:mm" from "YYYY-MM-DDTHH:mm:ssZ"
+        row := LV.Add("Check", entry.procName, entry.title, timeShort)
+    }
+    ; Check all rows by default
+    rowIdx := 0
+    while (rowIdx := LV.GetNext(rowIdx, "")) {
+        LV.Modify(rowIdx, "Check")
+    }
+    rescueGui.lv := LV
+
+    btnRestoreSelected := rescueGui.AddButton("xm w180 h32", "&Restore Selected")
+    btnRestoreSelected.OnEvent("Click", OnRescueRestoreSelected)
+    btnRestoreAll := rescueGui.AddButton("x+10 yp w160 h32 Default", "Restore &All")
+    btnRestoreAll.OnEvent("Click", OnRescueRestoreAll)
+    btnCancel := rescueGui.AddButton("x+10 yp w120 h32", "&Cancel")
+    btnCancel.OnEvent("Click", OnRescueCancel)
+
+    rescueGui.btnRestoreSelected := btnRestoreSelected
+    rescueGui.btnRestoreAll      := btnRestoreAll
+    rescueGui.btnCancel          := btnCancel
+
+    ApplyThemeToRescue()
+
+    rescueGui.Show("AutoSize Center")
+}
+
+ApplyThemeToRescue() {
+    global rescueGui, themeState
+    if (!IsObject(rescueGui))
+        return
+    pal := GetThemePalette(themeState)
+    try rescueGui.BackColor := pal.bg
+
+    ; ListView header + body coloring is limited in AHK Gui - we apply the body
+    ; color (close enough for both themes) and leave the header as system-default.
+    if (IsObject(rescueGui.lv)) {
+        try rescueGui.lv.Opt("Background" pal.bg " c" pal.text)
+        try rescueGui.lv.Redraw()
+    }
+
+    ; DWM dark title bar (Win10 19041+ / all Win11)
+    val := (themeState = "dark") ? 1 : 0
+    try DllCall("dwmapi\DwmSetWindowAttribute"
+        , "Ptr",  rescueGui.Hwnd
+        , "UInt", 20             ; DWMWA_USE_IMMERSIVE_DARK_MODE
+        , "Int*", val
+        , "UInt", 4)
 }
