@@ -99,11 +99,6 @@ global rescueGui           := 0    ; modal Gui handle while open; 0 otherwise
 global cleanupRestoreOnExit := true
 global exitGui              := 0   ; modal Gui handle for the exit confirmation
 
-; v1.0.7 owner-draw registry. Map of hwndItem (integer) -> render kind ("button" | "button-default" | "checkbox").
-; Declared up-here (not near RegisterOwnerDraw) because RescueOrphanedWindows registers buttons during
-; Initialize, and AHK v2 top-level globals init in source order - this MUST precede the Initialize() call.
-global ownerDrawRegistry := Map()
-
 ;==============================================================================
 ; Triggers
 ;==============================================================================
@@ -182,8 +177,6 @@ Initialize() {
 
     ; Register handler for tray callback message (WM_TRAYCALLBACK = 0x0401).
     OnMessage(WM_TRAYCALLBACK, OnTrayMessage)
-    ; v1.0.7: register handler for WM_DRAWITEM (0x002B) for owner-drawn buttons + checkbox.
-    OnMessage(0x002B, OnGuiDrawItem)
 
     ; Custom app tray icon. When running as compiled .exe, the embedded icon
     ; (set via Ahk2Exe /icon during compile) is already used by default.
@@ -247,6 +240,11 @@ Initialize() {
         if (A_IsCompiled)
             try RegWrite(themeState, "REG_SZ", APP_REG_KEY, APP_THEME_REG_VALUE)
     }
+
+    ; v1.0.7: set process-level dark/light mode preference BEFORE any Gui is created
+    ; (RescueOrphanedWindows below may create the rescue dialog). SetPreferredAppMode
+    ; affects which theme class new controls receive by default.
+    ApplyAppDarkMode(themeState)
 
     ; v1.0.7: surface any windows orphaned by a prior crashed session.
     RescueOrphanedWindows()
@@ -459,6 +457,10 @@ ApplyThemeToAbout() {
     ; DWMWA_USE_IMMERSIVE_DARK_MODE, supported on Win10 19041+ and all Win11.
     SetAboutTitleBarDark(themeState = "dark")
 
+    ; v1.0.7: uxtheme dark-mode private API - theme native controls (OK button,
+    ; Run-on-login checkbox, ListView if any) via SetWindowTheme("DarkMode_Explorer").
+    ApplyDarkModeToGui(aboutGui, themeState)
+
     ; Force a top-level repaint so the BackColor change is visible immediately
     try aboutGui.Show("NoActivate")
 }
@@ -481,6 +483,8 @@ ToggleTheme(*) {
     if (A_IsCompiled) {
         try RegWrite(themeState, "REG_SZ", APP_REG_KEY, APP_THEME_REG_VALUE)
     }
+    ; Update process-level preferred app mode for any new windows / controls.
+    ApplyAppDarkMode(themeState)
     ApplyThemeToAbout()
 }
 
@@ -1526,19 +1530,12 @@ ShowRescueDialog(survivors) {
     }
     rescueGui.lv := LV
 
-    ; BS_OWNERDRAW (0x0B) MUST be set at creation - it's a BS_TYPEMASK bit and Win32 silently
-    ; ignores post-creation TYPE changes (confirmed by AHK v2 docs). Default attribute is kept
-    ; for AHK's Enter-key wiring; the visual accent border is painted by DrawOwnerButton via
-    ; the "button-default" kind.
-    btnRestoreSelected := rescueGui.AddButton("xm w180 h32 +0xB", "&Restore Selected")
+    btnRestoreSelected := rescueGui.AddButton("xm w180 h32", "&Restore Selected")
     btnRestoreSelected.OnEvent("Click", OnRescueRestoreSelected)
-    RegisterOwnerDraw(btnRestoreSelected, "button")
-    btnRestoreAll := rescueGui.AddButton("x+10 yp w160 h32 Default +0xB", "Restore &All")
+    btnRestoreAll := rescueGui.AddButton("x+10 yp w160 h32 Default", "Restore &All")
     btnRestoreAll.OnEvent("Click", OnRescueRestoreAll)
-    RegisterOwnerDraw(btnRestoreAll, "button-default")
-    btnCancel := rescueGui.AddButton("x+10 yp w160 h32 +0xB", "Send All to &Tray")
+    btnCancel := rescueGui.AddButton("x+10 yp w160 h32", "Send All to &Tray")
     btnCancel.OnEvent("Click", OnRescueCancel)
-    RegisterOwnerDraw(btnCancel, "button")
 
     rescueGui.btnRestoreSelected := btnRestoreSelected
     rescueGui.btnRestoreAll      := btnRestoreAll
@@ -1556,8 +1553,7 @@ ApplyThemeToRescue() {
     pal := GetThemePalette(themeState)
     try rescueGui.BackColor := pal.bg
 
-    ; ListView header + body coloring is limited in AHK Gui - we apply the body
-    ; color (close enough for both themes) and leave the header as system-default.
+    ; ListView body color via AHK Gui options (header is dark-themed separately via subclass).
     if (IsObject(rescueGui.lv)) {
         try rescueGui.lv.Opt("Background" pal.bg " c" pal.title)
         try rescueGui.lv.Redraw()
@@ -1571,12 +1567,9 @@ ApplyThemeToRescue() {
         , "Int*", val
         , "UInt", 4)
 
-    ; Repaint owner-drawn buttons so they pick up the new palette colors
-    if (IsObject(rescueGui)) {
-        try rescueGui.btnRestoreSelected.Redraw()
-        try rescueGui.btnRestoreAll.Redraw()
-        try rescueGui.btnCancel.Redraw()
-    }
+    ; uxtheme dark-mode private API: theme every child control (buttons, listview)
+    ; with DarkMode_Explorer in dark, Explorer in light. This is the modern Win11 path.
+    ApplyDarkModeToGui(rescueGui, themeState)
 }
 
 OnRescueRestoreSelected(*) {
@@ -1649,33 +1642,63 @@ CloseRescue() {
 }
 
 ;==============================================================================
-; v1.0.7 GDI owner-draw - theme-aware buttons + checkbox + ListView header
+; v1.0.7 dark-mode private uxtheme APIs - theme-aware native controls
+;
+; Replaces what was originally drafted as GDI BS_OWNERDRAW + WM_DRAWITEM owner-draw
+; (15+ years dated; AHK silently dropped +0xB on AddButton; the path was a dead-end).
+;
+; Modern Win11 path: SetPreferredAppMode + AllowDarkModeForWindow + SetWindowTheme.
+; This is the same engine File Explorer / Settings / Notepad++ / ShareX use to dark-
+; theme native controls (buttons, ListView, checkbox, scrollbars). No painting; the
+; OS handles the rendering, hover/pressed states, focus ring, and accessibility tree
+; integration. Private uxtheme ordinals are technically undocumented but have been
+; stable since Win10 1809 (Oct 2018); Windows itself relies on them.
+;
+; Ordinals reference (uxtheme.dll):
+;   #132 ShouldAppsUseDarkMode (returns BOOL)
+;   #133 AllowDarkModeForWindow(hwnd, allow)
+;   #135 SetPreferredAppMode(mode)   ; 1=AllowDark, 2=ForceDark, 3=ForceLight, 4=Max
+;   #138 ShouldSystemUseDarkMode (returns BOOL)
 ;==============================================================================
 
-; ownerDrawRegistry is declared at the top of the script (above the Initialize() call) so the rescue
-; dialog can register buttons during startup. See the v1.0.7 globals block near the State section.
-;   kind: "button"         - DrawOwnerButton, isDefault=false
-;   kind: "button-default" - DrawOwnerButton, isDefault=true
-;   kind: "checkbox"       - DrawOwnerCheckbox (added in Task 12e)
+ApplyAppDarkMode(themeStateLocal) {
+    ; Process-level mode. Affects controls created AFTER this call. Call once at
+    ; startup and again on every theme toggle.
+    mode := (themeStateLocal = "dark") ? 2 : 3   ; 2=ForceDark, 3=ForceLight
+    try DllCall("uxtheme\#135", "Int", mode, "CDecl Int")
+}
 
-RegisterOwnerDraw(ctrl, kind) {
-    ; Record the control hwnd -> render kind. BS_OWNERDRAW (0x0B) is NOT applied here - it
-    ; must be set at AddButton creation time via "+0xB" in the options string, because
-    ; Win32 silently ignores post-creation TYPE changes (AHK v2 docs confirm this).
-    global ownerDrawRegistry
-    ownerDrawRegistry[ctrl.Hwnd] := kind
-    ; DIAG: log actual GWL_STYLE so we can verify BS_OWNERDRAW stuck. low nibble 0xB == ownerdraw.
-    try {
-        style := DllCall("GetWindowLongW", "Ptr", ctrl.Hwnd, "Int", -16, "UInt")
-        hasOD := ((style & 0xF) == 0xB) ? "YES" : "NO"
-        FileAppend(Format("[{1}] RegisterOwnerDraw kind={2} hwnd=0x{3:X} style=0x{4:X} BS_OWNERDRAW={5}`r`n",
-            A_Now, kind, ctrl.Hwnd, style, hasOD), A_Temp "\mtt-ownerdraw-debug.log")
+ApplyDarkModeToGui(guiObj, themeStateLocal) {
+    ; Window-level + per-control theme application. Used for live theme toggling on
+    ; already-created Gui windows. Calls AllowDarkModeForWindow on the top-level, then
+    ; SetWindowTheme("DarkMode_Explorer" or "Explorer") on each child control. Wrapped
+    ; in try blocks because uxtheme ordinals can fail silently on unsupported Win10
+    ; builds without taking down the rest of the theme apply.
+    if (!IsObject(guiObj))
+        return
+
+    allow := (themeStateLocal = "dark") ? 1 : 0
+    try DllCall("uxtheme\#133", "Ptr", guiObj.Hwnd, "Int", allow, "CDecl Int")
+
+    themeClass := (themeStateLocal = "dark") ? "DarkMode_Explorer" : "Explorer"
+    for hwndKey, ctrl in guiObj {
+        if (!IsObject(ctrl))
+            continue
+        try DllCall("uxtheme\SetWindowTheme"
+            , "Ptr",  ctrl.Hwnd
+            , "WStr", themeClass
+            , "Ptr",  0)
+        try DllCall("InvalidateRect", "Ptr", ctrl.Hwnd, "Ptr", 0, "Int", true)
     }
+
+    ; Force an immediate non-client area repaint so the title-bar dark mode and child
+    ; control re-theming take effect without waiting for the next user interaction.
+    try DllCall("InvalidateRect", "Ptr", guiObj.Hwnd, "Ptr", 0, "Int", true)
 }
 
 RgbHexToBgr(rgbHex) {
-    ; Convert RGB hex string ("RRGGBB" or "#RRGGBB") to a BGR COLORREF integer
-    ; for use with GDI functions (SetTextColor, CreateSolidBrush).
+    ; Convert "RRGGBB" or "#RRGGBB" to a BGR COLORREF int for use with GDI APIs
+    ; (SetTextColor, CreateSolidBrush). Used by the ListView header subclass.
     if (SubStr(rgbHex, 1, 1) == "#")
         rgbHex := SubStr(rgbHex, 2)
     n := Integer("0x" rgbHex)
@@ -1683,120 +1706,6 @@ RgbHexToBgr(rgbHex) {
     g := (n >> 8)  & 0xFF
     b :=  n        & 0xFF
     return (b << 16) | (g << 8) | r
-}
-
-OnGuiDrawItem(wParam, lParam, msg, hwnd) {
-    ; Global WM_DRAWITEM (0x002B) handler. Reads DRAWITEMSTRUCT from lParam,
-    ; dispatches to per-control paint by hwndItem.
-    global ownerDrawRegistry, themeState
-
-    hwndItem  := NumGet(lParam, 24, "Ptr")
-    ; DIAG: log every WM_DRAWITEM so we can verify the message is reaching our handler at all.
-    try FileAppend(Format("[{1}] OnGuiDrawItem msg=0x{2:X} parent=0x{3:X} hwndItem=0x{4:X} known={5}`r`n",
-        A_Now, msg, hwnd, hwndItem, ownerDrawRegistry.Has(hwndItem) ? "YES" : "NO"),
-        A_Temp "\mtt-ownerdraw-debug.log")
-    if (!ownerDrawRegistry.Has(hwndItem))
-        return  ; not one of ours; let default handler run
-
-    kind := ownerDrawRegistry[hwndItem]
-    pal  := GetThemePalette(themeState)
-
-    if (kind == "button")
-        DrawOwnerButton(lParam, pal, false)
-    else if (kind == "button-default")
-        DrawOwnerButton(lParam, pal, true)
-    else if (kind == "checkbox") {
-        ; Task 12e adds DrawOwnerCheckbox. For now silently no-op.
-        try DrawOwnerCheckbox(lParam, pal, hwndItem)
-    }
-
-    return true   ; we handled the paint
-}
-
-DrawOwnerButton(lParam, pal, isDefault) {
-    ; Paint a single button per DRAWITEMSTRUCT at lParam.
-    ; Reads itemState bit flags, picks bg/border colors, fills + frames + text + focus ring.
-
-    itemState := NumGet(lParam, 16, "UInt")
-    hdc       := NumGet(lParam, 32, "Ptr")
-    hwndItem  := NumGet(lParam, 24, "Ptr")
-    left      := NumGet(lParam, 40, "Int")
-    top       := NumGet(lParam, 44, "Int")
-    right     := NumGet(lParam, 48, "Int")
-    bottom    := NumGet(lParam, 52, "Int")
-
-    ODS_SELECTED := 0x0001
-    ODS_FOCUS    := 0x0010
-
-    isPressed := (itemState & ODS_SELECTED) != 0
-    isFocused := (itemState & ODS_FOCUS) != 0
-
-    ; Background fill color depends on state
-    if (isPressed)
-        bgColor := RgbHexToBgr(pal.buttonPressed)
-    else
-        bgColor := RgbHexToBgr(pal.buttonBg)
-
-    ; Border color: default-style buttons get the accent border, others get the regular border
-    if (isDefault)
-        borderColor := RgbHexToBgr(pal.buttonDefault)
-    else
-        borderColor := RgbHexToBgr(pal.buttonBorder)
-
-    ; Build a RECT buffer for the GDI calls
-    rect := Buffer(16, 0)
-    NumPut("Int", left,   rect, 0)
-    NumPut("Int", top,    rect, 4)
-    NumPut("Int", right,  rect, 8)
-    NumPut("Int", bottom, rect, 12)
-
-    ; Fill background
-    bgBrush := DllCall("CreateSolidBrush", "UInt", bgColor, "Ptr")
-    DllCall("FillRect", "Ptr", hdc, "Ptr", rect, "Ptr", bgBrush)
-    DllCall("DeleteObject", "Ptr", bgBrush)
-
-    ; Draw 1px border via FrameRect
-    borderBrush := DllCall("CreateSolidBrush", "UInt", borderColor, "Ptr")
-    DllCall("FrameRect", "Ptr", hdc, "Ptr", rect, "Ptr", borderBrush)
-    DllCall("DeleteObject", "Ptr", borderBrush)
-
-    ; Read the button's text via GetWindowTextW
-    bufLen := 256
-    textBuf := Buffer(bufLen * 2, 0)
-    DllCall("GetWindowTextW", "Ptr", hwndItem, "Ptr", textBuf, "Int", bufLen)
-    btnText := StrGet(textBuf, "UTF-16")
-
-    ; Draw the centered label
-    DllCall("SetBkMode", "Ptr", hdc, "Int", 1)             ; TRANSPARENT
-    DllCall("SetTextColor", "Ptr", hdc, "UInt", RgbHexToBgr(pal.buttonFg))
-
-    DT_CENTER     := 0x0001
-    DT_VCENTER    := 0x0004
-    DT_SINGLELINE := 0x0020
-    DllCall("DrawTextW"
-        , "Ptr",  hdc
-        , "WStr", btnText
-        , "Int",  -1
-        , "Ptr",  rect
-        , "UInt", DT_CENTER | DT_VCENTER | DT_SINGLELINE)
-
-    ; Focus ring: 3px inside, only if focused and not currently pressed
-    if (isFocused && !isPressed) {
-        focusRect := Buffer(16, 0)
-        NumPut("Int", left   + 3, focusRect, 0)
-        NumPut("Int", top    + 3, focusRect, 4)
-        NumPut("Int", right  - 3, focusRect, 8)
-        NumPut("Int", bottom - 3, focusRect, 12)
-        DllCall("DrawFocusRect", "Ptr", hdc, "Ptr", focusRect)
-    }
-}
-
-DrawOwnerCheckbox(lParam, pal, hwndItem) {
-    ; STUB - Task 12e replaces this with the real GDI+ owner-draw checkbox paint.
-    ; Declared here so that the forward reference from OnGuiDrawItem resolves
-    ; cleanly under #Warn and so the runtime "function does not exist" error path
-    ; never fires. Until 12e lands, the checkbox renders in its native style; the
-    ; only currently-wired owner-drawn controls are the rescue dialog buttons.
 }
 
 ;==============================================================================
@@ -1835,18 +1744,12 @@ ConfirmExitFromMenu(*) {
     bodyText := "Restore them all before exiting, or leave them hidden so you can recover them on next launch? Apps cannot be recovered if you log off or restart the computer before the next app launch."
     txtBody := exitGui.AddText("xm w432", bodyText)
 
-    ; +0xB applies BS_OWNERDRAW at creation. See ConfirmExitFromMenu's sibling block in
-    ; RescueOrphanedWindows for the rationale - same Win32 BS_TYPEMASK constraint.
-    btnRestore := exitGui.AddButton("xm w130 h32 Default +0xB", "&Restore && Exit")
+    btnRestore := exitGui.AddButton("xm w130 h32 Default", "&Restore && Exit")
     btnRestore.OnEvent("Click", (*) => DoExitWithChoice(true))
-    btnLeave := exitGui.AddButton("x+10 yp w130 h32 +0xB", "&Leave Hidden")
+    btnLeave := exitGui.AddButton("x+10 yp w130 h32", "&Leave Hidden")
     btnLeave.OnEvent("Click", (*) => DoExitWithChoice(false))
-    btnCancel := exitGui.AddButton("x+10 yp w130 h32 +0xB", "&Cancel")
+    btnCancel := exitGui.AddButton("x+10 yp w130 h32", "&Cancel")
     btnCancel.OnEvent("Click", (*) => CloseExitDialog())
-
-    RegisterOwnerDraw(btnRestore, "button-default")
-    RegisterOwnerDraw(btnLeave,   "button")
-    RegisterOwnerDraw(btnCancel,  "button")
 
     exitGui.txtBody := txtBody
     exitGui.btnRestore := btnRestore
@@ -1875,10 +1778,8 @@ ApplyThemeToExitDialog() {
         , "Int*", val
         , "UInt", 4)
 
-    ; Repaint owner-drawn buttons so they pick up the palette
-    try exitGui.btnRestore.Redraw()
-    try exitGui.btnLeave.Redraw()
-    try exitGui.btnCancel.Redraw()
+    ; uxtheme dark-mode private API: theme every child control with DarkMode_Explorer
+    ApplyDarkModeToGui(exitGui, themeState)
 }
 
 DoExitWithChoice(restoreFirst) {
