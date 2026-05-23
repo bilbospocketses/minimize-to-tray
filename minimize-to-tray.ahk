@@ -93,6 +93,12 @@ global HIDDEN_STATE_TMP    := ""
 global RESCUE_LOG_FILE     := ""
 global rescueGui           := 0    ; modal Gui handle while open; 0 otherwise
 
+; v1.0.7 exit flow: default-true so any non-user-initiated exit (logoff, shutdown,
+; Velopack update, crash) restores hidden windows for safety. User-initiated Exit
+; via the tray menu opens a confirmation dialog that may flip this to false.
+global cleanupRestoreOnExit := true
+global exitGui              := 0   ; modal Gui handle for the exit confirmation
+
 ;==============================================================================
 ; Triggers
 ;==============================================================================
@@ -218,7 +224,7 @@ Initialize() {
     A_TrayMenu.Add()
     A_TrayMenu.Add(RUN_MENU_LABEL, ToggleRunOnLoginFromMenu)
     A_TrayMenu.Add()
-    A_TrayMenu.Add("E&xit", (*) => ExitApp())
+    A_TrayMenu.Add("E&xit", ConfirmExitFromMenu)
     A_TrayMenu.Default := "&About"
     A_TrayMenu.ClickCount := 1   ; single left-click on the app tray icon opens About (default item)
 
@@ -1179,7 +1185,7 @@ OnWinEvent(hHook, event, hwnd, idObject, idChild, idEventThread, dwmsEventTime) 
 ; OnExit cleanup - restore every hidden window before quitting
 ;==============================================================================
 Cleanup(reason, code) {
-    global Groups, hWinEventHook
+    global Groups, hWinEventHook, cleanupRestoreOnExit
 
     ; Unhook the WinEvent listener first so destroy events during cleanup do not double-fire.
     if (hWinEventHook) {
@@ -1187,9 +1193,15 @@ Cleanup(reason, code) {
         hWinEventHook := 0
     }
 
+    ; Tray icons + in-memory state are always cleaned. The only conditional bit is
+    ; whether we restore the hidden windows (and clear the rescue state file) - that
+    ; depends on the user's choice via ConfirmExitFromMenu (or the safe default true
+    ; for non-user-initiated exits like logoff, shutdown, Velopack update).
     for procName, group in Groups {
-        for hwnd in group.windows {
-            try WinShow("ahk_id " hwnd)
+        if (cleanupRestoreOnExit) {
+            for hwnd in group.windows {
+                try WinShow("ahk_id " hwnd)
+            }
         }
         if (group.hIcon)
             DllCall("DestroyIcon", "Ptr", group.hIcon)
@@ -1197,8 +1209,11 @@ Cleanup(reason, code) {
     }
     Groups.Clear()
 
-    ; v1.0.7: every hidden window was just restored, so the rescue state is empty.
-    try HiddenState_Clear()
+    if (cleanupRestoreOnExit) {
+        ; Every hidden window restored - rescue state should be empty.
+        try HiddenState_Clear()
+    }
+    ; Otherwise: leave hidden.json populated so next launch surfaces them via rescue.
 }
 
 ;==============================================================================
@@ -1764,4 +1779,99 @@ DrawOwnerCheckbox(lParam, pal, hwndItem) {
     ; cleanly under #Warn and so the runtime "function does not exist" error path
     ; never fires. Until 12e lands, the checkbox renders in its native style; the
     ; only currently-wired owner-drawn controls are the rescue dialog buttons.
+}
+
+;==============================================================================
+; v1.0.7 exit flow - confirmation dialog when tray-managed windows exist
+;==============================================================================
+
+ConfirmExitFromMenu(*) {
+    global Groups, exitGui, themeState
+
+    ; Count managed windows across all groups.
+    totalWindows := 0
+    for procName, group in Groups
+        totalWindows += group.windows.Length
+
+    ; If no windows in tray, exit immediately. No dialog needed.
+    if (totalWindows == 0) {
+        ExitApp()
+        return
+    }
+
+    ; If a dialog is already open (double-click race), focus it instead of duplicating.
+    if (IsObject(exitGui)) {
+        try exitGui.Show()
+        return
+    }
+
+    exitGui := Gui("+AlwaysOnTop +MinSize460x180", "Exit minimize-to-tray")
+    exitGui.OnEvent("Close",  (*) => CloseExitDialog())
+    exitGui.OnEvent("Escape", (*) => CloseExitDialog())
+    exitGui.MarginX := 18
+    exitGui.MarginY := 16
+    exitGui.SetFont("s10", "Segoe UI")
+
+    countText := "You have " totalWindows " window" (totalWindows == 1 ? "" : "s") " hidden in the tray."
+    exitGui.AddText("xm w432", countText)
+    bodyText := "Restore them all before exiting, or leave them hidden so you can recover them on next launch? Apps cannot be recovered if you log off or restart the computer before the next app launch."
+    txtBody := exitGui.AddText("xm w432", bodyText)
+
+    btnRestore := exitGui.AddButton("xm w130 h32 Default", "&Restore && Exit")
+    btnRestore.OnEvent("Click", (*) => DoExitWithChoice(true))
+    btnLeave := exitGui.AddButton("x+10 yp w130 h32", "&Leave Hidden")
+    btnLeave.OnEvent("Click", (*) => DoExitWithChoice(false))
+    btnCancel := exitGui.AddButton("x+10 yp w130 h32", "&Cancel")
+    btnCancel.OnEvent("Click", (*) => CloseExitDialog())
+
+    RegisterOwnerDraw(btnRestore, "button-default")
+    RegisterOwnerDraw(btnLeave,   "button")
+    RegisterOwnerDraw(btnCancel,  "button")
+
+    exitGui.txtBody := txtBody
+    exitGui.btnRestore := btnRestore
+    exitGui.btnLeave   := btnLeave
+    exitGui.btnCancel  := btnCancel
+
+    ApplyThemeToExitDialog()
+
+    exitGui.Show("AutoSize Center")
+}
+
+ApplyThemeToExitDialog() {
+    global exitGui, themeState
+    if (!IsObject(exitGui))
+        return
+    pal := GetThemePalette(themeState)
+    try exitGui.BackColor := pal.bg
+    if (IsObject(exitGui.txtBody))
+        try exitGui.txtBody.Opt("c" pal.text)
+
+    ; DWM dark title bar
+    val := (themeState = "dark") ? 1 : 0
+    try DllCall("dwmapi\DwmSetWindowAttribute"
+        , "Ptr",  exitGui.Hwnd
+        , "UInt", 20
+        , "Int*", val
+        , "UInt", 4)
+
+    ; Repaint owner-drawn buttons so they pick up the palette
+    try exitGui.btnRestore.Redraw()
+    try exitGui.btnLeave.Redraw()
+    try exitGui.btnCancel.Redraw()
+}
+
+DoExitWithChoice(restoreFirst) {
+    global cleanupRestoreOnExit, exitGui
+    cleanupRestoreOnExit := restoreFirst
+    CloseExitDialog()
+    ExitApp()
+}
+
+CloseExitDialog() {
+    global exitGui
+    if (IsObject(exitGui)) {
+        try exitGui.Destroy()
+    }
+    exitGui := 0
 }
