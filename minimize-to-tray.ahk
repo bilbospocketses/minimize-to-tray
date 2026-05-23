@@ -861,6 +861,14 @@ HideAndStash(hwnd) {
 
     WinHide("ahk_id " hwnd)
 
+    ; v1.0.7: persist this hide so the next session can rescue it if we crash.
+    try {
+        title := WinGetTitle("ahk_id " hwnd)
+        HiddenState_Append(hwnd, pid, procName, exePath, title)
+    } catch as e {
+        LogRescue("HideAndStash: HiddenState_Append failed for hwnd=" hwnd ": " e.Message)
+    }
+
     ; Update tooltip with count
     UpdateGroupTooltip(procName)
 }
