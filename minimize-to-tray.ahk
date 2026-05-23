@@ -1521,7 +1521,8 @@ ShowRescueDialog(survivors) {
            . (survivors.Length == 1 ? "" : "s")
            . " hidden by a previous session of minimize-to-tray.`n"
            . "Restore the checked rows to view; unchecked rows return to the tray."
-    rescueGui.AddText("xm w612", intro)
+    txtIntro := rescueGui.AddText("xm w612", intro)
+    rescueGui.txtIntro := txtIntro
 
     LV := rescueGui.AddListView("xm w612 r10 +Checked +Grid",
         ["Process", "Window title", "Hidden at"])
@@ -1563,6 +1564,13 @@ ApplyThemeToRescue() {
         return
     pal := GetThemePalette(themeState)
     try rescueGui.BackColor := pal.bg
+
+    ; Intro Text color follows pal.text - parent BackColor alone isn't enough because the
+    ; Text control retains its initially-set text color (which was the light-theme default).
+    if (IsObject(rescueGui.txtIntro)) {
+        try rescueGui.txtIntro.Opt("c" pal.text)
+        try rescueGui.txtIntro.Redraw()
+    }
 
     ; ListView body color via AHK Gui options (header is dark-themed separately via subclass).
     if (IsObject(rescueGui.lv)) {
