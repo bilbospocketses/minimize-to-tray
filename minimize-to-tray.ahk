@@ -1137,3 +1137,17 @@ Cleanup(reason, code) {
     }
     Groups.Clear()
 }
+
+;==============================================================================
+; v1.0.7 rescue mode - persistent hidden-window state + log helper
+;==============================================================================
+LogRescue(message) {
+    ; Append a timestamped line to rescue.log. Best-effort - never throws.
+    global RESCUE_LOG_FILE
+    if (RESCUE_LOG_FILE == "")
+        return
+    try {
+        line := FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ") " " message "`n"
+        FileAppend(line, RESCUE_LOG_FILE, "UTF-8")
+    }
+}
