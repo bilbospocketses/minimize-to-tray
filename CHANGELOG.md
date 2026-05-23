@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-05-23
+
+### Fixed
+- Velopack lifecycle-hook handling. The main `minimize-to-tray.exe` is a native AHK-compiled binary (not .NET), so it didn't recognize the `--veloapp-install` / `--veloapp-updated` / `--veloapp-obsoleted` / `--veloapp-uninstall` args that Velopack passes during install / update / uninstall. The installer would launch the app normally and wait for the hook to exit, eventually surfacing "the application install hook failed". The hook handler now exits cleanly on any `--veloapp-*` arg, and `--veloapp-uninstall` additionally wipes the Run-on-login registry value so Windows doesn't keep trying to launch a no-longer-installed exe at login.
+
 ## [1.0.0] - 2026-05-23
 
 ### Added
@@ -28,5 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo hardened to CM-parity security baseline per the lockdown protocol: Dependabot alerts + automated security updates + secret scanning + push protection + Private Vulnerability Reporting all enabled. Actions allowlist active with `sha_pinning_required: true`. Squash-only merge policy. Branch ruleset on `main`: required signatures + linear history + PR-only changes + required status checks (`build-and-test` + `Scorecard analysis`). Tag ruleset on `refs/tags/v*`: required signatures + non-fast-forward + no deletion.
 - All workflow actions SHA-pinned to commit objects with precise `# vX.Y.Z` comments per the OpenSSF Scorecard imposter-commit verifier + Dependabot version-tracking lessons.
 
-[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.1
 [1.0.0]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.0
