@@ -99,19 +99,6 @@ global rescueGui           := 0    ; modal Gui handle while open; 0 otherwise
 global cleanupRestoreOnExit := true
 global exitGui              := 0   ; modal Gui handle for the exit confirmation
 
-; v1.0.7 ListView header subclass: CallbackCreate ptr kept alive while subclassed.
-; Hoisted up-here (not next to InstallHeaderDarkSubclass) because AHK v2 top-level
-; `global X := value` lines execute in source order during auto-exec - and the
-; rescue dialog's InstallHeaderDarkSubclass runs from inside Initialize() at the
-; top of the file. Same hoisting reason as exitGui / rescueGui above.
-global headerSubclassProcPtr := 0
-; Cached column header texts. Populated by InstallHeaderDarkSubclass(lv, columns)
-; and read by HeaderSubclassProc during WM_PAINT. Used instead of HDM_GETITEMW
-; because querying header item text via SendMessage-to-self from inside our WM_PAINT
-; failed to return text (HDM_GETITEMW returned bogus values; textBuf stayed empty).
-; The cached approach works because column headers are static for this dialog.
-global headerSubclassColumns := []
-
 ;==============================================================================
 ; Triggers
 ;==============================================================================
@@ -1530,8 +1517,20 @@ ShowRescueDialog(survivors) {
     txtIntro := rescueGui.AddText("xm w612", intro)
     rescueGui.txtIntro := txtIntro
 
-    columnHeaders := ["Process", "Window title", "Hidden at"]
-    LV := rescueGui.AddListView("xm w612 r10 +Checked +Grid", columnHeaders)
+    ; Suppress the native LV header (-Hdr) and use 3 Text controls above the LV as
+    ; column labels. This sidesteps the WM_PAINT-subclass rabbit hole entirely:
+    ; native SysHeader32 doesn't dark-theme via DarkMode_Explorer, and subclassing it
+    ; to override paint triggered re-entrancy bugs on column resize. Static column
+    ; widths are what we use anyway (ModifyCol below).
+    rescueGui.SetFont("s10 Bold", "Segoe UI")
+    txtColProcess := rescueGui.AddText("xm w130", "Process")
+    txtColTitle   := rescueGui.AddText("x+0 yp w380", "Window title")
+    txtColTime    := rescueGui.AddText("x+0 yp w80",  "Hidden at")
+    rescueGui.SetFont("s10 Norm", "Segoe UI")
+    rescueGui.colHeaders := [txtColProcess, txtColTitle, txtColTime]
+
+    LV := rescueGui.AddListView("xm w612 r10 -Hdr +Checked +Grid",
+        ["Process", "Window title", "Hidden at"])
     LV.ModifyCol(1, 130)
     LV.ModifyCol(2, 380)
     LV.ModifyCol(3, 80)
@@ -1555,11 +1554,6 @@ ShowRescueDialog(survivors) {
     rescueGui.btnRestoreAll      := btnRestoreAll
     rescueGui.btnCancel          := btnCancel
 
-    ; Subclass the LV's header for dark-theme rendering. Must precede the first
-    ; paint, so we install before ApplyThemeToRescue + Show. The columns array is
-    ; cached for the subclass to read during WM_PAINT (HDM_GETITEMW failed at runtime).
-    InstallHeaderDarkSubclass(LV, columnHeaders)
-
     ApplyThemeToRescue()
 
     rescueGui.Show("AutoSize Center")
@@ -1579,7 +1573,15 @@ ApplyThemeToRescue() {
         try rescueGui.txtIntro.Redraw()
     }
 
-    ; ListView body color via AHK Gui options (header is dark-themed separately via subclass).
+    ; Column header labels (Text controls above the LV - native header suppressed via -Hdr).
+    if (rescueGui.HasProp("colHeaders") && IsObject(rescueGui.colHeaders)) {
+        for ctrl in rescueGui.colHeaders {
+            try ctrl.Opt("c" pal.headerFg)
+            try ctrl.Redraw()
+        }
+    }
+
+    ; ListView body color via AHK Gui options.
     if (IsObject(rescueGui.lv)) {
         try rescueGui.lv.Opt("Background" pal.bg " c" pal.title)
         try rescueGui.lv.Redraw()
@@ -1596,15 +1598,6 @@ ApplyThemeToRescue() {
     ; uxtheme dark-mode private API: theme every child control (buttons, listview)
     ; with DarkMode_Explorer in dark, Explorer in light. This is the modern Win11 path.
     ApplyDarkModeToGui(rescueGui, themeState)
-
-    ; Invalidate the LV header explicitly so the subclass proc repaints with the
-    ; new theme. ApplyDarkModeToGui's InvalidateRect on the LV doesn't propagate
-    ; to its SysHeader32 child window.
-    if (IsObject(rescueGui.lv)) {
-        hdr := DllCall("SendMessageW", "Ptr", rescueGui.lv.Hwnd, "UInt", 0x101F, "Ptr", 0, "Ptr", 0, "Ptr")
-        if (hdr)
-            try DllCall("InvalidateRect", "Ptr", hdr, "Ptr", 0, "Int", true)
-    }
 }
 
 OnRescueRestoreSelected(*) {
@@ -1671,9 +1664,6 @@ OnRescueCancel(*) {
 CloseRescue() {
     global rescueGui
     if (IsObject(rescueGui)) {
-        ; Uninstall the header subclass before destroying the Gui so the comctl32
-        ; subclass chain is cleanly unwound and the CallbackCreate ptr is freed.
-        try UninstallHeaderDarkSubclass(rescueGui.lv)
         try rescueGui.Destroy()
     }
     rescueGui := 0
@@ -1732,178 +1722,6 @@ ApplyDarkModeToGui(guiObj, themeStateLocal) {
     ; Force an immediate non-client area repaint so the title-bar dark mode and child
     ; control re-theming take effect without waiting for the next user interaction.
     try DllCall("InvalidateRect", "Ptr", guiObj.Hwnd, "Ptr", 0, "Int", true)
-}
-
-RgbHexToBgr(rgbHex) {
-    ; Convert "RRGGBB" or "#RRGGBB" to a BGR COLORREF int for use with GDI APIs
-    ; (SetTextColor, CreateSolidBrush). Used by the ListView header subclass.
-    if (SubStr(rgbHex, 1, 1) == "#")
-        rgbHex := SubStr(rgbHex, 2)
-    n := Integer("0x" rgbHex)
-    r := (n >> 16) & 0xFF
-    g := (n >> 8)  & 0xFF
-    b :=  n        & 0xFF
-    return (b << 16) | (g << 8) | r
-}
-
-;==============================================================================
-; ListView header dark-theming via WM_PAINT subclass
-;
-; SetWindowTheme("DarkMode_Explorer") covers the ListView body but NOT its
-; header row - Win11 doesn't dark-theme SysHeader32 controls. Notepad++,
-; ShareX, and others handle this by subclassing the header HWND and overriding
-; WM_PAINT + WM_ERASEBKGND with dark colors. Light mode passes through to the
-; default subclass proc for native rendering.
-;==============================================================================
-
-; headerSubclassProcPtr is declared at the top of the script for auto-exec ordering
-; (the rescue dialog installs the subclass during Initialize, before this point in
-; source order). See the v1.0.7 globals block near the State section.
-
-InstallHeaderDarkSubclass(lv, columns) {
-    global headerSubclassProcPtr, headerSubclassColumns
-    if (!IsObject(lv))
-        return
-    if (headerSubclassProcPtr)
-        return   ; already installed - guard against double-install
-
-    ; LVM_GETHEADER = LVM_FIRST + 31 = 0x101F. Returns the LV's SysHeader32 child hwnd.
-    hdr := DllCall("SendMessageW", "Ptr", lv.Hwnd, "UInt", 0x101F, "Ptr", 0, "Ptr", 0, "Ptr")
-    if (!hdr)
-        return
-
-    headerSubclassColumns := columns
-    headerSubclassProcPtr := CallbackCreate(HeaderSubclassProc, "F", 6)
-    DllCall("comctl32\SetWindowSubclass"
-        , "Ptr", hdr
-        , "Ptr", headerSubclassProcPtr
-        , "Ptr", 1       ; uIdSubclass
-        , "Ptr", 0)      ; dwRefData
-}
-
-UninstallHeaderDarkSubclass(lv) {
-    global headerSubclassProcPtr, headerSubclassColumns
-    if (!headerSubclassProcPtr)
-        return
-    if (IsObject(lv)) {
-        hdr := DllCall("SendMessageW", "Ptr", lv.Hwnd, "UInt", 0x101F, "Ptr", 0, "Ptr", 0, "Ptr")
-        if (hdr) {
-            try DllCall("comctl32\RemoveWindowSubclass"
-                , "Ptr", hdr
-                , "Ptr", headerSubclassProcPtr
-                , "Ptr", 1)
-        }
-    }
-    try CallbackFree(headerSubclassProcPtr)
-    headerSubclassProcPtr := 0
-    headerSubclassColumns := []
-}
-
-HeaderSubclassProc(hWnd, msg, wParam, lParam, uIdSubclass, dwRefData) {
-    ; Win32 WindowProc-shaped subclass procedure. Called by comctl32 on the
-    ; window's thread (no marshaling concerns). Reads themeState at call time
-    ; so live theme toggles flip behavior without reinstalling.
-    global themeState, headerSubclassColumns
-
-    ; Light mode: pass through to native rendering.
-    if (themeState != "dark")
-        return DllCall("comctl32\DefSubclassProc"
-            , "Ptr",  hWnd
-            , "UInt", msg
-            , "Ptr",  wParam
-            , "Ptr",  lParam
-            , "Ptr")
-
-    pal := GetThemePalette(themeState)
-
-    if (msg = 0x0014) {   ; WM_ERASEBKGND
-        hdc := wParam
-        rc := Buffer(16, 0)
-        DllCall("GetClientRect", "Ptr", hWnd, "Ptr", rc)
-        brush := DllCall("CreateSolidBrush", "UInt", RgbHexToBgr(pal.headerBg), "Ptr")
-        DllCall("FillRect", "Ptr", hdc, "Ptr", rc, "Ptr", brush)
-        DllCall("DeleteObject", "Ptr", brush)
-        return 1   ; we handled it
-    }
-
-    if (msg = 0x000F) {   ; WM_PAINT
-        ps := Buffer(72, 0)
-        hdc := DllCall("BeginPaint", "Ptr", hWnd, "Ptr", ps, "Ptr")
-
-        ; Fill the whole client area with the header bg color.
-        clientRc := Buffer(16, 0)
-        DllCall("GetClientRect", "Ptr", hWnd, "Ptr", clientRc)
-        bgBrush := DllCall("CreateSolidBrush", "UInt", RgbHexToBgr(pal.headerBg), "Ptr")
-        DllCall("FillRect", "Ptr", hdc, "Ptr", clientRc, "Ptr", bgBrush)
-        DllCall("DeleteObject", "Ptr", bgBrush)
-
-        ; Set text rendering parameters once for the whole pass.
-        DllCall("SetBkMode", "Ptr", hdc, "Int", 1)   ; TRANSPARENT
-        DllCall("SetTextColor", "Ptr", hdc, "UInt", RgbHexToBgr(pal.headerFg))
-
-        ; Get the LV's font handle so header text matches the body font. The
-        ; header inherits the LV font via WM_SETFONT at creation; SelectObject
-        ; into our HDC so DrawTextW uses the right typeface + size.
-        hFont := DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x0031, "Ptr", 0, "Ptr", 0, "Ptr")   ; WM_GETFONT
-        oldFont := 0
-        if (hFont)
-            oldFont := DllCall("SelectObject", "Ptr", hdc, "Ptr", hFont, "Ptr")
-
-        ; Iterate header items. HDM_GETITEMCOUNT = 0x1200. HDM_GETITEMRECT = 0x1207.
-        ; Column text comes from the cached headerSubclassColumns array (set at install
-        ; time). HDM_GETITEMW failed when called from inside our WM_PAINT (textBuf
-        ; stayed empty; return value was bogus) so we use the upfront-known column
-        ; names instead.
-        count := DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x1200, "Ptr", 0, "Ptr", 0, "Ptr")
-
-        Loop count {
-            i := A_Index - 1
-            itemRc := Buffer(16, 0)
-            DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x1207, "Ptr", i, "Ptr", itemRc)
-
-            itemText := (i + 1 <= headerSubclassColumns.Length)
-                ? headerSubclassColumns[i + 1]
-                : ""
-
-            ; Draw text with 6px left/right inset, vertical center, single-line, ellipsis.
-            textRc := Buffer(16, 0)
-            NumPut("Int", NumGet(itemRc,  0, "Int") + 6, textRc,  0)
-            NumPut("Int", NumGet(itemRc,  4, "Int"),     textRc,  4)
-            NumPut("Int", NumGet(itemRc,  8, "Int") - 6, textRc,  8)
-            NumPut("Int", NumGet(itemRc, 12, "Int"),     textRc, 12)
-            DllCall("DrawTextW"
-                , "Ptr",  hdc
-                , "WStr", itemText
-                , "Int",  -1
-                , "Ptr",  textRc
-                , "UInt", 0x0004 | 0x0020 | 0x8000)   ; DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS
-
-            ; 1px vertical separator on the right edge of each item except the last.
-            if (i < count - 1) {
-                sepBrush := DllCall("CreateSolidBrush", "UInt", RgbHexToBgr(pal.buttonBorder), "Ptr")
-                sepRc := Buffer(16, 0)
-                NumPut("Int", NumGet(itemRc,  8, "Int") - 1, sepRc,  0)
-                NumPut("Int", NumGet(itemRc,  4, "Int") + 4, sepRc,  4)
-                NumPut("Int", NumGet(itemRc,  8, "Int"),     sepRc,  8)
-                NumPut("Int", NumGet(itemRc, 12, "Int") - 4, sepRc, 12)
-                DllCall("FillRect", "Ptr", hdc, "Ptr", sepRc, "Ptr", sepBrush)
-                DllCall("DeleteObject", "Ptr", sepBrush)
-            }
-        }
-
-        if (hFont)
-            DllCall("SelectObject", "Ptr", hdc, "Ptr", oldFont)
-
-        DllCall("EndPaint", "Ptr", hWnd, "Ptr", ps)
-        return 0
-    }
-
-    return DllCall("comctl32\DefSubclassProc"
-        , "Ptr",  hWnd
-        , "UInt", msg
-        , "Ptr",  wParam
-        , "Ptr",  lParam
-        , "Ptr")
 }
 
 ;==============================================================================
