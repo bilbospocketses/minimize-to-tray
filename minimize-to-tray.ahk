@@ -171,6 +171,8 @@ Initialize() {
 
     ; Register handler for tray callback message (WM_TRAYCALLBACK = 0x0401).
     OnMessage(WM_TRAYCALLBACK, OnTrayMessage)
+    ; v1.0.7: register handler for WM_DRAWITEM (0x002B) for owner-drawn buttons + checkbox.
+    OnMessage(0x002B, OnGuiDrawItem)
 
     ; Custom app tray icon. When running as compiled .exe, the embedded icon
     ; (set via Ahk2Exe /icon during compile) is already used by default.
@@ -1506,10 +1508,13 @@ ShowRescueDialog(survivors) {
 
     btnRestoreSelected := rescueGui.AddButton("xm w180 h32", "&Restore Selected")
     btnRestoreSelected.OnEvent("Click", OnRescueRestoreSelected)
+    RegisterOwnerDraw(btnRestoreSelected, "button")
     btnRestoreAll := rescueGui.AddButton("x+10 yp w160 h32 Default", "Restore &All")
     btnRestoreAll.OnEvent("Click", OnRescueRestoreAll)
+    RegisterOwnerDraw(btnRestoreAll, "button-default")
     btnCancel := rescueGui.AddButton("x+10 yp w160 h32", "Send All to &Tray")
     btnCancel.OnEvent("Click", OnRescueCancel)
+    RegisterOwnerDraw(btnCancel, "button")
 
     rescueGui.btnRestoreSelected := btnRestoreSelected
     rescueGui.btnRestoreAll      := btnRestoreAll
@@ -1541,6 +1546,13 @@ ApplyThemeToRescue() {
         , "UInt", 20             ; DWMWA_USE_IMMERSIVE_DARK_MODE
         , "Int*", val
         , "UInt", 4)
+
+    ; Repaint owner-drawn buttons so they pick up the new palette colors
+    if (IsObject(rescueGui)) {
+        try rescueGui.btnRestoreSelected.Redraw()
+        try rescueGui.btnRestoreAll.Redraw()
+        try rescueGui.btnCancel.Redraw()
+    }
 }
 
 OnRescueRestoreSelected(*) {
@@ -1610,4 +1622,138 @@ CloseRescue() {
         try rescueGui.Destroy()
     }
     rescueGui := 0
+}
+
+;==============================================================================
+; v1.0.7 GDI owner-draw - theme-aware buttons + checkbox + ListView header
+;==============================================================================
+
+; Map of hwndItem (as integer) -> render kind. Populated when we apply BS_OWNERDRAW
+; to a control; consulted by OnGuiDrawItem to route to the right paint helper.
+;   kind: "button"        - DrawOwnerButton, isDefault=false
+;   kind: "button-default"- DrawOwnerButton, isDefault=true
+;   kind: "checkbox"      - DrawOwnerCheckbox (added in Task 12e)
+global ownerDrawRegistry := Map()
+
+RegisterOwnerDraw(ctrl, kind) {
+    ; Apply BS_OWNERDRAW style (0x0B) and record the control's hwnd + render kind.
+    ; The Windows control style for buttons is set via SetWindowLong + GWL_STYLE.
+    ; We use ctrl.Opt("+0xB") which is the AHK 2 equivalent.
+    global ownerDrawRegistry
+    try ctrl.Opt("+0xB")
+    ownerDrawRegistry[ctrl.Hwnd] := kind
+}
+
+RgbHexToBgr(rgbHex) {
+    ; Convert RGB hex string ("RRGGBB" or "#RRGGBB") to a BGR COLORREF integer
+    ; for use with GDI functions (SetTextColor, CreateSolidBrush).
+    if (SubStr(rgbHex, 1, 1) == "#")
+        rgbHex := SubStr(rgbHex, 2)
+    n := Integer("0x" rgbHex)
+    r := (n >> 16) & 0xFF
+    g := (n >> 8)  & 0xFF
+    b :=  n        & 0xFF
+    return (b << 16) | (g << 8) | r
+}
+
+OnGuiDrawItem(wParam, lParam, msg, hwnd) {
+    ; Global WM_DRAWITEM (0x002B) handler. Reads DRAWITEMSTRUCT from lParam,
+    ; dispatches to per-control paint by hwndItem.
+    global ownerDrawRegistry, themeState
+
+    hwndItem  := NumGet(lParam, 24, "Ptr")
+    if (!ownerDrawRegistry.Has(hwndItem))
+        return  ; not one of ours; let default handler run
+
+    kind := ownerDrawRegistry[hwndItem]
+    pal  := GetThemePalette(themeState)
+
+    if (kind == "button")
+        DrawOwnerButton(lParam, pal, false)
+    else if (kind == "button-default")
+        DrawOwnerButton(lParam, pal, true)
+    else if (kind == "checkbox") {
+        ; Task 12e adds DrawOwnerCheckbox. For now silently no-op.
+        try DrawOwnerCheckbox(lParam, pal, hwndItem)
+    }
+
+    return true   ; we handled the paint
+}
+
+DrawOwnerButton(lParam, pal, isDefault) {
+    ; Paint a single button per DRAWITEMSTRUCT at lParam.
+    ; Reads itemState bit flags, picks bg/border colors, fills + frames + text + focus ring.
+
+    itemState := NumGet(lParam, 16, "UInt")
+    hdc       := NumGet(lParam, 32, "Ptr")
+    hwndItem  := NumGet(lParam, 24, "Ptr")
+    left      := NumGet(lParam, 40, "Int")
+    top       := NumGet(lParam, 44, "Int")
+    right     := NumGet(lParam, 48, "Int")
+    bottom    := NumGet(lParam, 52, "Int")
+
+    ODS_SELECTED := 0x0001
+    ODS_FOCUS    := 0x0010
+
+    isPressed := (itemState & ODS_SELECTED) != 0
+    isFocused := (itemState & ODS_FOCUS) != 0
+
+    ; Background fill color depends on state
+    if (isPressed)
+        bgColor := RgbHexToBgr(pal.buttonPressed)
+    else
+        bgColor := RgbHexToBgr(pal.buttonBg)
+
+    ; Border color: default-style buttons get the accent border, others get the regular border
+    if (isDefault)
+        borderColor := RgbHexToBgr(pal.buttonDefault)
+    else
+        borderColor := RgbHexToBgr(pal.buttonBorder)
+
+    ; Build a RECT buffer for the GDI calls
+    rect := Buffer(16, 0)
+    NumPut("Int", left,   rect, 0)
+    NumPut("Int", top,    rect, 4)
+    NumPut("Int", right,  rect, 8)
+    NumPut("Int", bottom, rect, 12)
+
+    ; Fill background
+    bgBrush := DllCall("CreateSolidBrush", "UInt", bgColor, "Ptr")
+    DllCall("FillRect", "Ptr", hdc, "Ptr", rect, "Ptr", bgBrush)
+    DllCall("DeleteObject", "Ptr", bgBrush)
+
+    ; Draw 1px border via FrameRect
+    borderBrush := DllCall("CreateSolidBrush", "UInt", borderColor, "Ptr")
+    DllCall("FrameRect", "Ptr", hdc, "Ptr", rect, "Ptr", borderBrush)
+    DllCall("DeleteObject", "Ptr", borderBrush)
+
+    ; Read the button's text via GetWindowTextW
+    bufLen := 256
+    textBuf := Buffer(bufLen * 2, 0)
+    DllCall("GetWindowTextW", "Ptr", hwndItem, "Ptr", textBuf, "Int", bufLen)
+    btnText := StrGet(textBuf, "UTF-16")
+
+    ; Draw the centered label
+    DllCall("SetBkMode", "Ptr", hdc, "Int", 1)             ; TRANSPARENT
+    DllCall("SetTextColor", "Ptr", hdc, "UInt", RgbHexToBgr(pal.buttonFg))
+
+    DT_CENTER     := 0x0001
+    DT_VCENTER    := 0x0004
+    DT_SINGLELINE := 0x0020
+    DllCall("DrawTextW"
+        , "Ptr",  hdc
+        , "WStr", btnText
+        , "Int",  -1
+        , "Ptr",  rect
+        , "UInt", DT_CENTER | DT_VCENTER | DT_SINGLELINE)
+
+    ; Focus ring: 3px inside, only if focused and not currently pressed
+    if (isFocused && !isPressed) {
+        focusRect := Buffer(16, 0)
+        NumPut("Int", left   + 3, focusRect, 0)
+        NumPut("Int", top    + 3, focusRect, 4)
+        NumPut("Int", right  - 3, focusRect, 8)
+        NumPut("Int", bottom - 3, focusRect, 12)
+        DllCall("DrawFocusRect", "Ptr", hdc, "Ptr", focusRect)
+    }
 }
