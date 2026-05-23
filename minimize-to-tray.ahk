@@ -1757,3 +1757,11 @@ DrawOwnerButton(lParam, pal, isDefault) {
         DllCall("DrawFocusRect", "Ptr", hdc, "Ptr", focusRect)
     }
 }
+
+DrawOwnerCheckbox(lParam, pal, hwndItem) {
+    ; STUB - Task 12e replaces this with the real GDI+ owner-draw checkbox paint.
+    ; Declared here so that the forward reference from OnGuiDrawItem resolves
+    ; cleanly under #Warn and so the runtime "function does not exist" error path
+    ; never fires. Until 12e lands, the checkbox renders in its native style; the
+    ; only currently-wired owner-drawn controls are the rescue dialog buttons.
+}
