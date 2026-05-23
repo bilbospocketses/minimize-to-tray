@@ -821,8 +821,6 @@ MinimizeUnderCursor() {
 ; Core flow
 ;==============================================================================
 HideAndStash(hwnd) {
-    global Groups, nextTrayUid
-
     try {
         pid      := WinGetPID("ahk_id " hwnd)
         procName := ProcessGetName(pid)
@@ -831,36 +829,9 @@ HideAndStash(hwnd) {
         return  ; window died or we cannot see it
     }
 
-    if (Groups.Has(procName)) {
-        ; Push onto existing group
-        group := Groups[procName]
-        group.windows.Push(hwnd)
-    } else {
-        ; First window of this type - create new group + new tray icon
-        hIcon := GetExeIcon(exePath)
-        if (!hIcon) {
-            ; Fall back to generic app icon
-            hIcon := DllCall("LoadIconW", "Ptr", 0, "Ptr", 32512, "Ptr")
-        }
-        uid := nextTrayUid
-        nextTrayUid++
-
-        result := ShellNotifyAdd(uid, hIcon, procName)
-        if (!result) {
-            ; Retry once after 500ms
-            Sleep(500)
-            result := ShellNotifyAdd(uid, hIcon, procName)
-        }
-        if (!result) {
-            MsgBox("Shell_NotifyIcon(NIM_ADD) failed twice for " procName ". Aborting minimize.",
-                   "minimize-to-tray", "IconX")
-            DllCall("DestroyIcon", "Ptr", hIcon)
-            return
-        }
-
-        Groups[procName] := { windows: [hwnd], trayUid: uid, hIcon: hIcon }
-        group := Groups[procName]
-    }
+    ; Register in tray group system (creates group + icon if first window of this type)
+    if (!RegisterTrayGroup(hwnd, pid, procName, exePath))
+        return  ; ShellNotifyAdd failed twice, error already shown
 
     WinHide("ahk_id " hwnd)
 
@@ -872,7 +843,51 @@ HideAndStash(hwnd) {
         LogRescue("HideAndStash: HiddenState_Append failed for hwnd=" hwnd ": " e.Message)
     }
 
-    ; Update tooltip with count
+    UpdateGroupTooltip(procName)
+}
+
+RegisterTrayGroup(hwnd, pid, procName, exePath) {
+    ; Shared private helper used by HideAndStash and StashAlreadyHidden.
+    ; Adds hwnd to the procName group (creating + registering tray icon if needed).
+    ; Returns true on success, false if Shell_NotifyIcon registration failed.
+    global Groups, nextTrayUid
+
+    if (Groups.Has(procName)) {
+        Groups[procName].windows.Push(hwnd)
+        return true
+    }
+
+    ; First window of this type - create new group + new tray icon
+    hIcon := GetExeIcon(exePath)
+    if (!hIcon)
+        hIcon := DllCall("LoadIconW", "Ptr", 0, "Ptr", 32512, "Ptr")
+
+    uid := nextTrayUid
+    nextTrayUid++
+
+    result := ShellNotifyAdd(uid, hIcon, procName)
+    if (!result) {
+        Sleep(500)
+        result := ShellNotifyAdd(uid, hIcon, procName)
+    }
+    if (!result) {
+        MsgBox("Shell_NotifyIcon(NIM_ADD) failed twice for " procName ". Aborting minimize.",
+               "minimize-to-tray", "IconX")
+        DllCall("DestroyIcon", "Ptr", hIcon)
+        return false
+    }
+
+    Groups[procName] := { windows: [hwnd], trayUid: uid, hIcon: hIcon }
+    return true
+}
+
+StashAlreadyHidden(hwnd, pid, procName, exePath) {
+    ; Rescue path: window is already hidden from a previous session. We just
+    ; need to re-register it in Groups + tray. The hidden.json entry was
+    ; written by the previous session and stays in place (preserved across
+    ; this session's RegisterTrayGroup call - we do NOT call HiddenState_Append).
+    if (!RegisterTrayGroup(hwnd, pid, procName, exePath))
+        return
     UpdateGroupTooltip(procName)
 }
 
@@ -1452,7 +1467,7 @@ ShowRescueDialog(survivors) {
     intro := "Found " survivors.Length " window"
            . (survivors.Length == 1 ? "" : "s")
            . " hidden by a previous session of minimize-to-tray.`n"
-           . "Uncheck any you want to leave hidden."
+           . "Restore the checked rows to view; unchecked rows return to the tray."
     rescueGui.AddText("xm w612", intro)
 
     LV := rescueGui.AddListView("xm w612 r10 +Checked +Grid",
@@ -1473,7 +1488,7 @@ ShowRescueDialog(survivors) {
     btnRestoreSelected.OnEvent("Click", OnRescueRestoreSelected)
     btnRestoreAll := rescueGui.AddButton("x+10 yp w160 h32 Default", "Restore &All")
     btnRestoreAll.OnEvent("Click", OnRescueRestoreAll)
-    btnCancel := rescueGui.AddButton("x+10 yp w120 h32", "&Cancel")
+    btnCancel := rescueGui.AddButton("x+10 yp w160 h32", "Send All to &Tray")
     btnCancel.OnEvent("Click", OnRescueCancel)
 
     rescueGui.btnRestoreSelected := btnRestoreSelected
@@ -1515,34 +1530,29 @@ OnRescueRestoreSelected(*) {
     LV := rescueGui.lv
     entries := rescueGui.entries
 
-    restored := []
+    ; Build a set of checked row indices for fast lookup
+    checkedRows := Map()
     rowIdx := 0
-    while (rowIdx := LV.GetNext(rowIdx, "C")) {     ; iterate Checked rows
-        if (rowIdx > entries.Length)
-            continue
-        entry := entries[rowIdx]
-        try {
-            WinShow("ahk_id " entry.hwnd)
-            restored.Push(entry.hwnd)
-        } catch as e {
-            LogRescue("Rescue restore-selected failed for hwnd=" entry.hwnd ": " e.Message)
-        }
-    }
+    while (rowIdx := LV.GetNext(rowIdx, "C"))
+        checkedRows[rowIdx] := true
 
-    ; Rewrite hidden.json with only the UNRESTORED entries (those still rescuable next launch).
-    survivors := []
-    for entry in entries {
-        keep := true
-        for h in restored {
-            if (h == entry.hwnd) {
-                keep := false
-                break
-            }
+    ; Iterate every row; checked => WinShow + Remove from file, unchecked => StashAlreadyHidden
+    Loop entries.Length {
+        idx := A_Index
+        entry := entries[idx]
+        if (checkedRows.Has(idx)) {
+            ; Checked: restore to view
+            try WinShow("ahk_id " entry.hwnd)
+            catch as e
+                LogRescue("Rescue restore-selected WinShow failed for hwnd=" entry.hwnd ": " e.Message)
+            try HiddenState_Remove(entry.hwnd)
+            catch as e
+                LogRescue("Rescue restore-selected HiddenState_Remove failed for hwnd=" entry.hwnd ": " e.Message)
+        } else {
+            ; Unchecked: return to the tray. Entry stays in hidden.json (mirrors in-memory Groups).
+            StashAlreadyHidden(entry.hwnd, entry.pid, entry.procName, entry.procPath)
         }
-        if (keep)
-            survivors.Push(entry)
     }
-    HiddenState_AtomicWrite(JsonEncodeHiddenState(survivors))
 
     CloseRescue()
 }
@@ -1562,8 +1572,15 @@ OnRescueRestoreAll(*) {
 }
 
 OnRescueCancel(*) {
-    ; User explicitly opted out. Orphaned windows stay hidden; no re-prompt next launch.
-    HiddenState_Clear()
+    ; "Send All to Tray" semantics: every entry re-registers into the running tray.
+    ; hidden.json is left alone - the entries already represent in-memory Groups state
+    ; after this call. Also called for Esc / Close X.
+    global rescueGui
+    if (IsObject(rescueGui)) {
+        for entry in rescueGui.entries {
+            StashAlreadyHidden(entry.hwnd, entry.pid, entry.procName, entry.procPath)
+        }
+    }
     CloseRescue()
 }
 
