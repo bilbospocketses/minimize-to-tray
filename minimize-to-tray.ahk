@@ -1836,6 +1836,7 @@ HeaderSubclassProc(hWnd, msg, wParam, lParam, uIdSubclass, dwRefData) {
         ; header inherits the LV font via WM_SETFONT at creation; SelectObject
         ; into our HDC so DrawTextW uses the right typeface + size.
         hFont := DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x0031, "Ptr", 0, "Ptr", 0, "Ptr")   ; WM_GETFONT
+        oldFont := 0
         if (hFont)
             oldFont := DllCall("SelectObject", "Ptr", hdc, "Ptr", hFont, "Ptr")
 
@@ -1843,10 +1844,13 @@ HeaderSubclassProc(hWnd, msg, wParam, lParam, uIdSubclass, dwRefData) {
         ; HDM_GETITEMW = 0x1213. HDI_TEXT mask = 0x02.
         count := DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x1200, "Ptr", 0, "Ptr", 0, "Ptr")
 
+        try FileAppend(Format("[{1}] HeaderPaint count={2} hFont=0x{3:X}`r`n",
+            A_Now, count, hFont), A_Temp "\mtt-header-debug.log")
+
         Loop count {
             i := A_Index - 1
             itemRc := Buffer(16, 0)
-            DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x1207, "Ptr", i, "Ptr", itemRc)
+            rcRet := DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x1207, "Ptr", i, "Ptr", itemRc, "Ptr")
 
             ; HDITEMW on x64: mask(4) + cxy(4) + pszText@8(8) + hbm@16(8) + cchTextMax@24(4) + ...
             textBuf := Buffer(256 * 2, 0)
@@ -1854,8 +1858,15 @@ HeaderSubclassProc(hWnd, msg, wParam, lParam, uIdSubclass, dwRefData) {
             NumPut("UInt", 0x02,         hdi,  0)    ; mask = HDI_TEXT
             NumPut("Ptr",  textBuf.Ptr,  hdi,  8)    ; pszText
             NumPut("Int",  256,          hdi, 24)    ; cchTextMax
-            DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x1213, "Ptr", i, "Ptr", hdi)
+            getRet := DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x1213, "Ptr", i, "Ptr", hdi, "Ptr")
             itemText := StrGet(textBuf, "UTF-16")
+
+            try FileAppend(Format("[{1}]   item={2} rcRet={3} rect=({4},{5},{6},{7}) getRet={8} text='{9}' len={10}`r`n",
+                A_Now, i, rcRet,
+                NumGet(itemRc, 0, "Int"), NumGet(itemRc, 4, "Int"),
+                NumGet(itemRc, 8, "Int"), NumGet(itemRc, 12, "Int"),
+                getRet, itemText, StrLen(itemText)),
+                A_Temp "\mtt-header-debug.log")
 
             ; Draw text with 6px left/right inset, vertical center, single-line, ellipsis.
             textRc := Buffer(16, 0)
