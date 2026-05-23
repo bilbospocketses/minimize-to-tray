@@ -85,6 +85,14 @@ global APP_REG_KEY                 := "HKEY_CURRENT_USER\Software\bilbospocketse
 global FIRST_RUN_PENDING_REG_VALUE := "FirstRunPending"
 global APP_THEME_REG_VALUE         := "Theme"
 
+; v1.0.7 rescue mode: persistent hidden-window tracking + diagnostic state.
+; APP_DATA_DIR is %LOCALAPPDATA%\bilbospocketses\minimize-to-tray\, created in Initialize().
+global APP_DATA_DIR        := ""
+global HIDDEN_STATE_FILE   := ""
+global HIDDEN_STATE_TMP    := ""
+global RESCUE_LOG_FILE     := ""
+global rescueGui           := 0    ; modal Gui handle while open; 0 otherwise
+
 ;==============================================================================
 ; Triggers
 ;==============================================================================
@@ -184,6 +192,18 @@ Initialize() {
     } else {
         appImagePath := A_ScriptDir "\assets\app.png"
     }
+
+    ; Resolve app-data paths (rescue state + log). Falls back to A_AppData if
+    ; LOCALAPPDATA is empty (rare but possible in stripped service-account profiles).
+    global APP_DATA_DIR, HIDDEN_STATE_FILE, HIDDEN_STATE_TMP, RESCUE_LOG_FILE
+    base := EnvGet("LOCALAPPDATA")
+    if (base == "")
+        base := A_AppData
+    APP_DATA_DIR      := base "\bilbospocketses\minimize-to-tray"
+    HIDDEN_STATE_FILE := APP_DATA_DIR "\hidden.json"
+    HIDDEN_STATE_TMP  := APP_DATA_DIR "\hidden.json.tmp"
+    RESCUE_LOG_FILE   := APP_DATA_DIR "\rescue.log"
+    try DirCreate(APP_DATA_DIR)
 
     ; Always-visible app tray icon tooltip
     A_IconTip := "minimize-to-tray`n"
