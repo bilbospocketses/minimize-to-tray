@@ -364,27 +364,47 @@ OnAboutRunOnLoginToggle(ctrl, *) {
 GetThemePalette(name) {
     if (name = "dark") {
         return {
-            bg:         "1F1F1F",
-            title:      "F2F2F2",
-            version:    "A0A0A0",
-            shortcut:   "F2F2F2",
-            italic:     "B8B8B8",
-            url:        "4DA3FF",
-            checkbox:   "F2F2F2",
-            okButton:   "F2F2F2",
-            themeGlyph: ""           ; emoji moon is color-locked; tint is ignored
+            bg:           "1F1F1F",
+            title:        "F2F2F2",
+            version:      "A0A0A0",
+            shortcut:     "F2F2F2",
+            italic:       "B8B8B8",
+            url:          "4DA3FF",
+            checkbox:     "F2F2F2",
+            okButton:     "F2F2F2",
+            themeGlyph:   "",          ; emoji moon is color-locked; tint is ignored
+            text:         "F2F2F2",    ; v1.0.7: rescue dialog body text
+            buttonBg:     "2D2D2D",    ; v1.0.7: owner-drawn button fill (normal)
+            buttonFg:     "F2F2F2",    ; v1.0.7: owner-drawn button text
+            buttonBorder: "4D4D4D",    ; v1.0.7: owner-drawn button border
+            buttonHover:  "383838",    ; v1.0.7: owner-drawn button fill (hover, deferred)
+            buttonPressed:"252525",    ; v1.0.7: owner-drawn button fill (pressed)
+            buttonDefault:"4DA3FF",    ; v1.0.7: default-pushbutton accent border
+            headerBg:     "2D2D2D",    ; v1.0.7: ListView header background
+            headerFg:     "F2F2F2",    ; v1.0.7: ListView header text
+            focusRing:    "4DA3FF"     ; v1.0.7: focus-ring inside owner-drawn controls
         }
     }
     return {
-        bg:         "FFFFFF",
-        title:      "000000",
-        version:    "707070",
-        shortcut:   "000000",
-        italic:     "606060",
-        url:        "0066CC",
-        checkbox:   "000000",
-        okButton:   "000000",
-        themeGlyph: "D9A300"          ; gold sun
+        bg:           "FFFFFF",
+        title:        "000000",
+        version:      "707070",
+        shortcut:     "000000",
+        italic:       "606060",
+        url:          "0066CC",
+        checkbox:     "000000",
+        okButton:     "000000",
+        themeGlyph:   "D9A300",        ; gold sun
+        text:         "000000",
+        buttonBg:     "FDFDFD",
+        buttonFg:     "000000",
+        buttonBorder: "D1D1D1",
+        buttonHover:  "F5F5F5",
+        buttonPressed:"E6E6E6",
+        buttonDefault:"0078D4",
+        headerBg:     "F0F0F0",
+        headerFg:     "000000",
+        focusRing:    "0078D4"
     }
 }
 
