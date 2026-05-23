@@ -99,6 +99,11 @@ global rescueGui           := 0    ; modal Gui handle while open; 0 otherwise
 global cleanupRestoreOnExit := true
 global exitGui              := 0   ; modal Gui handle for the exit confirmation
 
+; v1.0.7 owner-draw registry. Map of hwndItem (integer) -> render kind ("button" | "button-default" | "checkbox").
+; Declared up-here (not near RegisterOwnerDraw) because RescueOrphanedWindows registers buttons during
+; Initialize, and AHK v2 top-level globals init in source order - this MUST precede the Initialize() call.
+global ownerDrawRegistry := Map()
+
 ;==============================================================================
 ; Triggers
 ;==============================================================================
@@ -1643,12 +1648,11 @@ CloseRescue() {
 ; v1.0.7 GDI owner-draw - theme-aware buttons + checkbox + ListView header
 ;==============================================================================
 
-; Map of hwndItem (as integer) -> render kind. Populated when we apply BS_OWNERDRAW
-; to a control; consulted by OnGuiDrawItem to route to the right paint helper.
-;   kind: "button"        - DrawOwnerButton, isDefault=false
-;   kind: "button-default"- DrawOwnerButton, isDefault=true
-;   kind: "checkbox"      - DrawOwnerCheckbox (added in Task 12e)
-global ownerDrawRegistry := Map()
+; ownerDrawRegistry is declared at the top of the script (above the Initialize() call) so the rescue
+; dialog can register buttons during startup. See the v1.0.7 globals block near the State section.
+;   kind: "button"         - DrawOwnerButton, isDefault=false
+;   kind: "button-default" - DrawOwnerButton, isDefault=true
+;   kind: "checkbox"       - DrawOwnerCheckbox (added in Task 12e)
 
 RegisterOwnerDraw(ctrl, kind) {
     ; Apply BS_OWNERDRAW style (0x0B) and record the control's hwnd + render kind.
