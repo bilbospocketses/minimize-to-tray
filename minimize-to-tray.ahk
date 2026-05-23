@@ -1564,21 +1564,26 @@ ShowRescueDialog(survivors) {
     ;   * outer-left, outer-right (match LV's outer border)
     ;   * 3 column-end dividers (Process|Title, Title|Hidden, Hidden|phantom right gutter)
     ; Positions derived from LVM_GETCOLUMNWIDTH (=0x101D) for pixel-accurate alignment
-    ; with the LV's auto-drawn grid lines. Return type MUST be "Int" - "Ptr" reads 8
-    ; bytes from RAX and picks up garbage in the high 32 bits, producing huge values.
+    ; with the LV's auto-drawn grid lines.
+    ;
+    ; CRITICAL: LVM_GETCOLUMNWIDTH returns DEVICE PIXELS, but AHK Gui coords use DIPs
+    ; (device-independent pixels). At any DPI != 100% the values differ by a factor of
+    ; A_ScreenDPI/96. Failing to convert puts verticals far off at HiDPI displays.
+    ; ModifyCol(N, w) takes DIPs and AHK scales internally to device pixels; the
+    ; round-trip is the conversion below.
     LV.GetPos(&lvX, &lvY, &lvW, &lvH)
     col1W := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 0, "Ptr", 0, "Int")
     col2W := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 1, "Ptr", 0, "Int")
     col3W := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 2, "Ptr", 0, "Int")
+    dpiScale := A_ScreenDPI / 96
+    col1W := Round(col1W / dpiScale)
+    col2W := Round(col2W / dpiScale)
+    col3W := Round(col3W / dpiScale)
 
     sepHorizTop.GetPos(&topX, &topY, &topW, &topH)
     sepHorizBottom.GetPos(&botX, &botY, &botW, &botH)
     vertY := topY
     vertH := (botY + botH) - topY
-
-    try FileAppend(Format("[{1}] grid lvX={2} lvY={3} lvW={4} lvH={5} col1W={6} col2W={7} col3W={8} sum={9} vertY={10} vertH={11}`r`n",
-        A_Now, lvX, lvY, lvW, lvH, col1W, col2W, col3W, (col1W + col2W + col3W), vertY, vertH),
-        A_Temp "\mtt-grid-debug.log")
 
     vertOuterL := rescueGui.AddText("x" lvX                              " y" vertY " w1 h" vertH, "")
     vertCol1   := rescueGui.AddText("x" (lvX + col1W)                    " y" vertY " w1 h" vertH, "")
