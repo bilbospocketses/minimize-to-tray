@@ -55,7 +55,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.1"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.2"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
@@ -71,6 +71,11 @@ global RUN_REG_VALUE     := "minimize-to-tray"
 global RUN_MENU_LABEL    := "&Run on login"
 global runOnLoginState   := 0           ; in-process truth; seeded from registry at init
 global aboutRunOnLoginCb := 0           ; About-dialog checkbox handle (or 0 when dialog closed)
+
+; App-scoped registry key for first-run signaling between the Velopack install
+; hook and the first normal launch (used by v1.0.2's "show About after install").
+global APP_REG_KEY                 := "HKEY_CURRENT_USER\Software\bilbospocketses\minimize-to-tray"
+global FIRST_RUN_PENDING_REG_VALUE := "FirstRunPending"
 
 ;==============================================================================
 ; Triggers
@@ -95,8 +100,19 @@ MButton::MinimizeUnderCursor()
 ; timeout. On uninstall, also wipe the Run-on-login registry entry so Windows
 ; doesn't keep trying to launch a no-longer-installed exe at login.
 for arg in A_Args {
+    if (arg = "--veloapp-install") {
+        ; Fresh install: default Run-on-login ON, and set a first-run marker so
+        ; the normal-launch path that follows will surface the About dialog once
+        ; (giving the user a chance to opt out of Run-on-login immediately).
+        try RegWrite(A_ScriptFullPath, "REG_SZ", RUN_REG_KEY, RUN_REG_VALUE)
+        try RegWrite(1, "REG_DWORD", APP_REG_KEY, FIRST_RUN_PENDING_REG_VALUE)
+        ExitApp 0
+    }
     if (arg = "--veloapp-uninstall") {
+        ; Wipe everything we wrote so Windows doesn't keep launching a gone exe
+        ; at login and we don't leave stray app-scoped values behind.
         try RegDelete(RUN_REG_KEY, RUN_REG_VALUE)
+        try RegDeleteKey(APP_REG_KEY)
         ExitApp 0
     }
     if (SubStr(arg, 1, 10) = "--veloapp-") {
@@ -188,6 +204,18 @@ Initialize() {
     ; Schedule an asynchronous Velopack update check 5 seconds after start.
     ; Stub-only until updater-helper.exe is built and packaged with the app.
     SetTimer(CheckForUpdateAsync, -5000)
+
+    ; First-run after a fresh install: the --veloapp-install hook set
+    ; FirstRunPending. Pop About so the user sees the Run-on-login default
+    ; (now ON) and can opt out immediately. Clear the marker so this only
+    ; happens once per install.
+    try {
+        pending := RegRead(APP_REG_KEY, FIRST_RUN_PENDING_REG_VALUE, 0)
+        if (pending) {
+            try RegDelete(APP_REG_KEY, FIRST_RUN_PENDING_REG_VALUE)
+            SetTimer(ShowAbout, -800)   ; ~800ms after init so the tray icon settles first
+        }
+    }
 }
 
 ;==============================================================================

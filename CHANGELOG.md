@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-05-23
+
+### Added
+- Show About dialog automatically once after a fresh install, so the user sees (and can immediately opt out of) the Run-on-login default. Subsequent launches behave as before. (Updates from v1.0.0 / v1.0.1 do NOT trigger the post-install About — only fresh installs do.)
+- Default Run-on-login to ON for fresh installs. Existing v1.0.0 / v1.0.1 users updating to v1.0.2 retain whatever Run-on-login setting they already had.
+
+### Changed
+- `--veloapp-uninstall` now also wipes the entire `HKCU\Software\bilbospocketses\minimize-to-tray` registry key (in addition to the existing Run-on-login value cleanup) so no app-scoped state lingers post-uninstall.
+
 ## [1.0.1] - 2026-05-23
 
 ### Fixed
@@ -33,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo hardened to CM-parity security baseline per the lockdown protocol: Dependabot alerts + automated security updates + secret scanning + push protection + Private Vulnerability Reporting all enabled. Actions allowlist active with `sha_pinning_required: true`. Squash-only merge policy. Branch ruleset on `main`: required signatures + linear history + PR-only changes + required status checks (`build-and-test` + `Scorecard analysis`). Tag ruleset on `refs/tags/v*`: required signatures + non-fast-forward + no deletion.
 - All workflow actions SHA-pinned to commit objects with precise `# vX.Y.Z` comments per the OpenSSF Scorecard imposter-commit verifier + Dependabot version-tracking lessons.
 
-[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.2
 [1.0.1]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.1
 [1.0.0]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.0
