@@ -1060,6 +1060,9 @@ OnTrayMessage(wParam, lParam, msg, hwnd) {
             WinShow("ahk_id " targetHwnd)
             WinActivate("ahk_id " targetHwnd)
         }
+        try HiddenState_Remove(targetHwnd)
+        catch as e
+            LogRescue("OnTrayMessage LBUTTONUP: HiddenState_Remove failed for hwnd=" targetHwnd ": " e.Message)
         ; If stack now empty, destroy group; else update tooltip
         if (group.windows.Length == 0)
             DestroyGroup(foundProcName)
