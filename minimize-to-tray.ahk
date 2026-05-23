@@ -1512,3 +1512,70 @@ ApplyThemeToRescue() {
         , "Int*", val
         , "UInt", 4)
 }
+
+OnRescueRestoreSelected(*) {
+    global rescueGui
+    if (!IsObject(rescueGui))
+        return
+    LV := rescueGui.lv
+    entries := rescueGui.entries
+
+    restored := []
+    rowIdx := 0
+    while (rowIdx := LV.GetNext(rowIdx, "C")) {     ; iterate Checked rows
+        if (rowIdx > entries.Length)
+            continue
+        entry := entries[rowIdx]
+        try {
+            WinShow("ahk_id " entry.hwnd)
+            restored.Push(entry.hwnd)
+        } catch as e {
+            LogRescue("Rescue restore-selected failed for hwnd=" entry.hwnd ": " e.Message)
+        }
+    }
+
+    ; Rewrite hidden.json with only the UNRESTORED entries (those still rescuable next launch).
+    survivors := []
+    for entry in entries {
+        keep := true
+        for h in restored {
+            if (h == entry.hwnd) {
+                keep := false
+                break
+            }
+        }
+        if (keep)
+            survivors.Push(entry)
+    }
+    HiddenState_AtomicWrite(JsonEncodeHiddenState(survivors))
+
+    CloseRescue()
+}
+
+OnRescueRestoreAll(*) {
+    global rescueGui
+    if (!IsObject(rescueGui))
+        return
+    entries := rescueGui.entries
+    for entry in entries {
+        try WinShow("ahk_id " entry.hwnd)
+        catch as e
+            LogRescue("Rescue restore-all failed for hwnd=" entry.hwnd ": " e.Message)
+    }
+    HiddenState_Clear()
+    CloseRescue()
+}
+
+OnRescueCancel(*) {
+    ; User explicitly opted out. Orphaned windows stay hidden; no re-prompt next launch.
+    HiddenState_Clear()
+    CloseRescue()
+}
+
+CloseRescue() {
+    global rescueGui
+    if (IsObject(rescueGui)) {
+        try rescueGui.Destroy()
+    }
+    rescueGui := 0
+}
