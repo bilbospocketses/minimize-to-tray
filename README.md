@@ -14,7 +14,7 @@
 
 ## Why
 
-Windows doesn't ship with minimize-to-tray. The existing utilities in this space (RBTray, MinTrayR, TrayIt, various AutoHotkey scripts) are stale, fork-fragmented, or behave inconsistently on modern Windows. This is a focused minimal-surface utility — two triggers, smart per-app grouping, and consistent behavior across modern Win32 apps.
+Windows doesn't ship with minimize-to-tray. The existing utilities in this space (RBTray, MinTrayR, TrayIt, various AutoHotkey scripts) are stale, fork-fragmented, or behave inconsistently on modern Windows. This is a focused v1 with two triggers, exactly one configuration (run on login or don't), and consistent behavior across modern Win32 apps. See below for caveats on middle-click behavior with certain apps.
 
 ## Install
 
