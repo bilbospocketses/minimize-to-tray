@@ -18,9 +18,18 @@ Windows doesn't ship with minimize-to-tray. The existing utilities in this space
 
 ## Install
 
-Download `minimize-to-tray.exe` from the [latest release](https://github.com/bilbospocketses/minimize-to-tray/releases/latest) and double-click to run. No installer, no dependencies on the target machine -- the AutoHotkey runtime is bundled into the executable.
+Two options from the [latest release](https://github.com/bilbospocketses/minimize-to-tray/releases/latest):
 
-**First-run note:** Windows SmartScreen will warn about the unsigned executable. Click **More info** -> **Run anyway**. Code signing is a planned follow-up.
+- **`minimize-to-tray-win-Setup.exe`** (recommended) — Velopack installer. Per-user install to `%LocalAppData%\minimize-to-tray\`, adds Start Menu + Desktop shortcuts, registers in Add/Remove Programs, and wires up the auto-update path. No UAC prompt.
+- **`minimize-to-tray-win-Portable.zip`** — extract anywhere and run `minimize-to-tray.exe`. No install, no shortcuts, no Add/Remove entry. Manual updates only (the blue update-available dot won't apply downloaded packages without the Velopack folder layout the installer creates).
+
+The AutoHotkey runtime is bundled into the executable either way — there's nothing to install separately on the target machine.
+
+**First-run note:** Windows SmartScreen will warn about the unsigned installer/executable. Click **More info** -> **Run anyway**. Code signing is a planned follow-up.
+
+### Updates
+
+When a newer version is published to the [Releases page](https://github.com/bilbospocketses/minimize-to-tray/releases), the app's About dialog (single-left-click the tray icon) shows a pulsing blue dot in the top-right corner. Click the dot to download and apply the update in place — the app restarts on the new version automatically. Update checking happens silently ~5 seconds after launch via the bundled `updater-helper.exe`.
 
 ## Usage
 
@@ -82,9 +91,12 @@ See [`dependencies/README.md`](dependencies/README.md) for what's vendored, vers
 
 ```
 minimize-to-tray.ahk    The script (AutoHotkey v2)
-build.ps1               Ahk2Exe wrapper
-assets/app.ico          App icon (embedded in compiled .exe)
+build.ps1               Build chain: Ahk2Exe -> dotnet publish -> vpk pack
+updater-helper/         .NET 10 Velopack update bridge (CLI: `check`, `update`)
+dotnet-tools.json       Project-pinned vpk (Velopack CLI)
+assets/                 App icon (.ico, .png) + source materials
 dependencies/           Vendored build-time binaries (AHK runtime + Ahk2Exe)
+.github/                Dependabot config + CI / Scorecard workflows
 docs/specs/             Design specs
 docs/plans/             Implementation plans
 ```
