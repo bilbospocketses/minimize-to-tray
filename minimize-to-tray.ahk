@@ -61,6 +61,17 @@ global UpdateVersion    := ""            ; the new version string from the helpe
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
 global appImagePath     := ""            ; resolved at script init - source file in dev, %TEMP% in compiled
 
+; Run-on-login state. The in-process global is the source of truth so dev-mode
+; toggles persist within a session without writing the registry (raw .ahk
+; A_ScriptFullPath isn't directly executable at Windows login). Compiled .exe
+; mirrors writes to HKCU\...\Run\<RUN_REG_VALUE>, and the global is seeded from
+; the registry at startup so it survives across launches.
+global RUN_REG_KEY       := "HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run"
+global RUN_REG_VALUE     := "minimize-to-tray"
+global RUN_MENU_LABEL    := "&Run on login"
+global runOnLoginState   := 0           ; in-process truth; seeded from registry at init
+global aboutRunOnLoginCb := 0           ; About-dialog checkbox handle (or 0 when dialog closed)
+
 ;==============================================================================
 ; Triggers
 ;==============================================================================
@@ -126,9 +137,16 @@ Initialize() {
     A_TrayMenu.Delete()
     A_TrayMenu.Add("&About", ShowAbout)
     A_TrayMenu.Add()
+    A_TrayMenu.Add(RUN_MENU_LABEL, ToggleRunOnLoginFromMenu)
+    A_TrayMenu.Add()
     A_TrayMenu.Add("E&xit", (*) => ExitApp())
     A_TrayMenu.Default := "&About"
     A_TrayMenu.ClickCount := 1   ; single left-click on the app tray icon opens About (default item)
+
+    ; Seed Run-on-login state from the registry and sync UI
+    global runOnLoginState
+    runOnLoginState := ReadRegistryRunOnLogin()
+    UpdateRunOnLoginUI()
 
     ; Register destroy hook for orphan cleanup.
     ; No "F" (Fast) option - we want the callback marshaled to AHK's main thread
@@ -150,6 +168,70 @@ Initialize() {
     ; Schedule an asynchronous Velopack update check 5 seconds after start.
     ; Stub-only until updater-helper.exe is built and packaged with the app.
     SetTimer(CheckForUpdateAsync, -5000)
+}
+
+;==============================================================================
+; Run-on-login (Windows registry HKCU\...\Run autostart entry)
+;==============================================================================
+; Reading + writing the registry value is the single source of truth.
+; Both the tray right-click menu item and the About-dialog checkbox sync
+; through UpdateRunOnLoginUI() after any toggle.
+
+IsRunOnLoginEnabled() {
+    global runOnLoginState
+    return runOnLoginState
+}
+
+ReadRegistryRunOnLogin() {
+    global RUN_REG_KEY, RUN_REG_VALUE
+    try {
+        val := RegRead(RUN_REG_KEY, RUN_REG_VALUE)
+        return (val != "") ? 1 : 0
+    } catch {
+        return 0
+    }
+}
+
+SetRunOnLogin(enabled) {
+    global runOnLoginState, RUN_REG_KEY, RUN_REG_VALUE
+    runOnLoginState := enabled ? 1 : 0
+    ; Registry write only meaningful in compiled mode - raw .ahk's A_ScriptFullPath
+    ; isn't directly executable at Windows login. Dev toggles persist in-session
+    ; via the global only.
+    if (A_IsCompiled) {
+        if (enabled) {
+            try RegWrite(A_ScriptFullPath, "REG_SZ", RUN_REG_KEY, RUN_REG_VALUE)
+        } else {
+            try RegDelete(RUN_REG_KEY, RUN_REG_VALUE)
+        }
+    }
+    UpdateRunOnLoginUI()
+}
+
+UpdateRunOnLoginUI() {
+    global RUN_MENU_LABEL, aboutRunOnLoginCb, runOnLoginState
+    enabled := runOnLoginState
+
+    ; Sync the tray menu checkmark
+    try {
+        if (enabled)
+            A_TrayMenu.Check(RUN_MENU_LABEL)
+        else
+            A_TrayMenu.Uncheck(RUN_MENU_LABEL)
+    }
+
+    ; Sync the About-dialog checkbox (if open)
+    if (aboutRunOnLoginCb && IsObject(aboutRunOnLoginCb)) {
+        try aboutRunOnLoginCb.Value := enabled
+    }
+}
+
+ToggleRunOnLoginFromMenu(*) {
+    SetRunOnLogin(!IsRunOnLoginEnabled())
+}
+
+OnAboutRunOnLoginToggle(ctrl, *) {
+    SetRunOnLogin(ctrl.Value)
 }
 
 ;==============================================================================
@@ -242,12 +324,26 @@ ShowAbout(*) {
     aboutGui.Add("Text", Format("x28 y+8 w{1} Center", contentW),
                  "minimize focused window to tray")
 
-    ; ---- Footer (URL + OK) ----
-    ; Tightened gaps to compensate for the shortcut block bumping down; total dialog
-    ; height stays effectively unchanged.
-    aboutGui.SetFont("s9 Norm c808080", "Segoe UI")
-    aboutGui.Add("Text", Format("x28 y+24 w{1} Center", contentW),
-                 "https://github.com/bilbospocketses/minimize-to-tray")
+    ; ---- Run on login (centered checkbox above the URL) ----
+    ; AHK Checkbox with `w 440 Center` pins the box to the LEFT of a 440px-wide
+    ; control and only centers the label - the box+label combo looks split.
+    ; Instead: add at a placeholder x with no explicit width (auto-sizes to label),
+    ; measure the actual width, then Move to a calculated centered x. This puts
+    ; the box directly to the left of "Run on login" as a tight unit.
+    global aboutRunOnLoginCb
+    aboutGui.SetFont("s10 Norm c000000", "Segoe UI")
+    aboutRunOnLoginCb := aboutGui.Add("Checkbox", "x28 y+20", "Run on login")
+    aboutRunOnLoginCb.Value := IsRunOnLoginEnabled()
+    aboutRunOnLoginCb.OnEvent("Click", OnAboutRunOnLoginToggle)
+    aboutRunOnLoginCb.GetPos(, &cbY, &cbW, )
+    aboutRunOnLoginCb.Move(28 + (contentW - cbW) // 2, cbY)
+
+    ; ---- Footer (clickable URL + OK) ----
+    ; URL styled as a link (blue + underline). Click opens in default browser.
+    githubUrl := "https://github.com/bilbospocketses/minimize-to-tray"
+    aboutGui.SetFont("s9 Norm c0066CC Underline", "Segoe UI")
+    urlCtrl := aboutGui.Add("Text", Format("x28 y+12 w{1} Center", contentW), githubUrl)
+    urlCtrl.OnEvent("Click", (*) => Run(githubUrl))
 
     okX := 28 + (contentW - 96) // 2
     aboutGui.SetFont("s9 Norm c000000", "Segoe UI")
@@ -260,7 +356,7 @@ ShowAbout(*) {
 }
 
 CloseAbout() {
-    global aboutGui, aboutDot, pulseTimer
+    global aboutGui, aboutDot, pulseTimer, aboutRunOnLoginCb
     if (pulseTimer) {
         SetTimer(pulseTimer, 0)
         pulseTimer := 0
@@ -272,6 +368,7 @@ CloseAbout() {
     }
     aboutGui := 0
     aboutDot := 0
+    aboutRunOnLoginCb := 0
 }
 
 UpdateDotTooltip() {
