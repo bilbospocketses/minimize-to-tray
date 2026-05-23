@@ -55,7 +55,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.5"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.6"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
@@ -130,12 +130,23 @@ for arg in A_Args {
     }
 }
 
-; Dev-only flag for smoke-testing the pulsing dot without a real update.
-; Pass /devshowdot on the command line to force UpdateAvailable := true.
+; Dev-only flags for smoke-testing the update-available UI without a real update.
+; /devshowdot         - force UpdateAvailable := true at startup so the dot is
+;                       present from the first About open. Tests the dot-at-
+;                       creation path.
+; /devsimulateupdate  - leave UpdateAvailable := false at startup; on the next
+;                       CheckForUpdateAsync run (startup +5s, or every About
+;                       open via the v1.0.4 timer), short-circuit the helper
+;                       call and flip UpdateAvailable. Tests the live-inject
+;                       path added in v1.0.5: open About, watch the dot appear.
+global DevSimulateUpdate := false
 for arg in A_Args {
     if (arg = "/devshowdot") {
         UpdateAvailable := true
         UpdateVersion := "1.0.99-dev"
+    }
+    if (arg = "/devsimulateupdate") {
+        DevSimulateUpdate := true
     }
 }
 
@@ -678,7 +689,18 @@ OnClickUpdateDot(*) {
 ; Velopack update check (async, fire-and-forget)
 ;------------------------------------------------------------------------------
 CheckForUpdateAsync() {
-    global UpdateAvailable, UpdateVersion, A_IsCompiled
+    global UpdateAvailable, UpdateVersion, A_IsCompiled, DevSimulateUpdate
+
+    ; Dev short-circuit: /devsimulateupdate flag bypasses the helper entirely
+    ; and just flips UpdateAvailable + AddUpdateDotToAbout. Smoke test for the
+    ; live-inject path. The "!UpdateAvailable" guard prevents repeated triggers
+    ; once already flipped (this function fires from multiple call sites).
+    if (DevSimulateUpdate && !UpdateAvailable) {
+        UpdateAvailable := true
+        UpdateVersion := "1.0.99-dev"
+        AddUpdateDotToAbout()
+        return
+    }
 
     ; Only check when running as compiled exe inside a Velopack install
     if (!A_IsCompiled)
