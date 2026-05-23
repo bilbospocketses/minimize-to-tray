@@ -1228,6 +1228,25 @@ Cleanup(reason, code) {
 ;==============================================================================
 ; v1.0.7 rescue mode - persistent hidden-window state + log helper
 ;==============================================================================
+
+FormatHiddenAtLocalShort(isoUtcString) {
+    ; Convert "YYYY-MM-DDTHH:mm:ssZ" (UTC) to local-time "HH:mm".
+    ; Storage stays UTC for portability across timezones; display converts on render.
+    ; UTC->local offset comes from the difference between local now and UTC now.
+    if (StrLen(isoUtcString) < 19)
+        return ""
+    ; Strip ISO punctuation to AHK's "YYYYMMDDHH24MISS" stamp format.
+    stampUtc := SubStr(isoUtcString,  1, 4)
+              . SubStr(isoUtcString,  6, 2)
+              . SubStr(isoUtcString,  9, 2)
+              . SubStr(isoUtcString, 12, 2)
+              . SubStr(isoUtcString, 15, 2)
+              . SubStr(isoUtcString, 18, 2)
+    offsetSeconds := DateDiff(A_Now, A_NowUTC, "Seconds")
+    stampLocal := DateAdd(stampUtc, offsetSeconds, "Seconds")
+    return FormatTime(stampLocal, "HH:mm")
+}
+
 LogRescue(message) {
     ; Append a timestamped line to rescue.log. Best-effort - never throws.
     ; Strip embedded newlines from message so multi-line content (window titles,
@@ -1522,14 +1541,16 @@ ShowRescueDialog(survivors) {
     ; native SysHeader32 doesn't dark-theme via DarkMode_Explorer, and subclassing it
     ; to override paint triggered re-entrancy bugs on column resize. Static column
     ; widths are what we use anyway (ModifyCol below).
+    ; Label x-positions are offset 6px from each column's left edge to align with the
+    ; LV's internal column text padding. LV uses y+2 to sit tight under the labels.
     rescueGui.SetFont("s10 Bold", "Segoe UI")
-    txtColProcess := rescueGui.AddText("xm w130", "Process")
-    txtColTitle   := rescueGui.AddText("x+0 yp w380", "Window title")
-    txtColTime    := rescueGui.AddText("x+0 yp w80",  "Hidden at")
+    txtColProcess := rescueGui.AddText("xm+6 w124",     "Process")
+    txtColTitle   := rescueGui.AddText("x+6 yp w374",   "Window title")
+    txtColTime    := rescueGui.AddText("x+6 yp w74",    "Hidden at")
     rescueGui.SetFont("s10 Norm", "Segoe UI")
     rescueGui.colHeaders := [txtColProcess, txtColTitle, txtColTime]
 
-    LV := rescueGui.AddListView("xm w612 r10 -Hdr +Checked +Grid",
+    LV := rescueGui.AddListView("xm y+2 w612 r10 -Hdr +Checked +Grid",
         ["Process", "Window title", "Hidden at"])
     LV.ModifyCol(1, 130)
     LV.ModifyCol(2, 380)
@@ -1538,7 +1559,7 @@ ShowRescueDialog(survivors) {
     ; Stash survivor entries on the LV via a parallel array (LV row index -> entry).
     rescueGui.entries := survivors
     for entry in survivors {
-        timeShort := SubStr(entry.hiddenAt, 12, 5)   ; "HH:mm" from "YYYY-MM-DDTHH:mm:ssZ"
+        timeShort := FormatHiddenAtLocalShort(entry.hiddenAt)
         LV.Add("Check", entry.procName, entry.title, timeShort)
     }
     rescueGui.lv := LV
