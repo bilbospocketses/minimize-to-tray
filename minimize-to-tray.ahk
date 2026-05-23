@@ -1526,13 +1526,17 @@ ShowRescueDialog(survivors) {
     }
     rescueGui.lv := LV
 
-    btnRestoreSelected := rescueGui.AddButton("xm w180 h32", "&Restore Selected")
+    ; BS_OWNERDRAW (0x0B) MUST be set at creation - it's a BS_TYPEMASK bit and Win32 silently
+    ; ignores post-creation TYPE changes (confirmed by AHK v2 docs). Default attribute is kept
+    ; for AHK's Enter-key wiring; the visual accent border is painted by DrawOwnerButton via
+    ; the "button-default" kind.
+    btnRestoreSelected := rescueGui.AddButton("xm w180 h32 +0xB", "&Restore Selected")
     btnRestoreSelected.OnEvent("Click", OnRescueRestoreSelected)
     RegisterOwnerDraw(btnRestoreSelected, "button")
-    btnRestoreAll := rescueGui.AddButton("x+10 yp w160 h32 Default", "Restore &All")
+    btnRestoreAll := rescueGui.AddButton("x+10 yp w160 h32 Default +0xB", "Restore &All")
     btnRestoreAll.OnEvent("Click", OnRescueRestoreAll)
     RegisterOwnerDraw(btnRestoreAll, "button-default")
-    btnCancel := rescueGui.AddButton("x+10 yp w160 h32", "Send All to &Tray")
+    btnCancel := rescueGui.AddButton("x+10 yp w160 h32 +0xB", "Send All to &Tray")
     btnCancel.OnEvent("Click", OnRescueCancel)
     RegisterOwnerDraw(btnCancel, "button")
 
@@ -1655,11 +1659,10 @@ CloseRescue() {
 ;   kind: "checkbox"       - DrawOwnerCheckbox (added in Task 12e)
 
 RegisterOwnerDraw(ctrl, kind) {
-    ; Apply BS_OWNERDRAW style (0x0B) and record the control's hwnd + render kind.
-    ; The Windows control style for buttons is set via SetWindowLong + GWL_STYLE.
-    ; We use ctrl.Opt("+0xB") which is the AHK 2 equivalent.
+    ; Record the control hwnd -> render kind. BS_OWNERDRAW (0x0B) is NOT applied here - it
+    ; must be set at AddButton creation time via "+0xB" in the options string, because
+    ; Win32 silently ignores post-creation TYPE changes (AHK v2 docs confirm this).
     global ownerDrawRegistry
-    try ctrl.Opt("+0xB")
     ownerDrawRegistry[ctrl.Hwnd] := kind
 }
 
@@ -1821,11 +1824,13 @@ ConfirmExitFromMenu(*) {
     bodyText := "Restore them all before exiting, or leave them hidden so you can recover them on next launch? Apps cannot be recovered if you log off or restart the computer before the next app launch."
     txtBody := exitGui.AddText("xm w432", bodyText)
 
-    btnRestore := exitGui.AddButton("xm w130 h32 Default", "&Restore && Exit")
+    ; +0xB applies BS_OWNERDRAW at creation. See ConfirmExitFromMenu's sibling block in
+    ; RescueOrphanedWindows for the rationale - same Win32 BS_TYPEMASK constraint.
+    btnRestore := exitGui.AddButton("xm w130 h32 Default +0xB", "&Restore && Exit")
     btnRestore.OnEvent("Click", (*) => DoExitWithChoice(true))
-    btnLeave := exitGui.AddButton("x+10 yp w130 h32", "&Leave Hidden")
+    btnLeave := exitGui.AddButton("x+10 yp w130 h32 +0xB", "&Leave Hidden")
     btnLeave.OnEvent("Click", (*) => DoExitWithChoice(false))
-    btnCancel := exitGui.AddButton("x+10 yp w130 h32", "&Cancel")
+    btnCancel := exitGui.AddButton("x+10 yp w130 h32 +0xB", "&Cancel")
     btnCancel.OnEvent("Click", (*) => CloseExitDialog())
 
     RegisterOwnerDraw(btnRestore, "button-default")
