@@ -1296,3 +1296,43 @@ ParseHiddenEntry(obj) {
         return ""    ; required field missing - drop entry
     return entry
 }
+
+HiddenState_AtomicWrite(jsonText) {
+    ; Write to .tmp then MoveFileExW(MOVEFILE_REPLACE_EXISTING=1). Crash mid-write
+    ; leaves either the old or new file intact, never a partial.
+    global HIDDEN_STATE_FILE, HIDDEN_STATE_TMP
+    if (HIDDEN_STATE_FILE == "")
+        return
+    try {
+        ; Truncate-overwrite the tmp file
+        if FileExist(HIDDEN_STATE_TMP)
+            FileDelete(HIDDEN_STATE_TMP)
+        FileAppend(jsonText, HIDDEN_STATE_TMP, "UTF-8")
+        ok := DllCall("MoveFileExW"
+            , "WStr", HIDDEN_STATE_TMP
+            , "WStr", HIDDEN_STATE_FILE
+            , "UInt", 1                  ; MOVEFILE_REPLACE_EXISTING
+            , "Int")
+        if (!ok)
+            LogRescue("MoveFileExW failed: " A_LastError " (tmp=" HIDDEN_STATE_TMP ", dst=" HIDDEN_STATE_FILE ")")
+    } catch as e {
+        LogRescue("AtomicWrite threw: " e.Message)
+    }
+}
+
+HiddenState_Read() {
+    global HIDDEN_STATE_FILE
+    if (HIDDEN_STATE_FILE == "" || !FileExist(HIDDEN_STATE_FILE))
+        return []
+    try {
+        text := FileRead(HIDDEN_STATE_FILE, "UTF-8")
+        return JsonDecodeHiddenState(text)
+    } catch as e {
+        LogRescue("HiddenState_Read failed: " e.Message)
+        return []
+    }
+}
+
+HiddenState_Clear() {
+    HiddenState_AtomicWrite('{"version":1,"windows":[]}')
+}
