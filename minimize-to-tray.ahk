@@ -105,6 +105,12 @@ global exitGui              := 0   ; modal Gui handle for the exit confirmation
 ; rescue dialog's InstallHeaderDarkSubclass runs from inside Initialize() at the
 ; top of the file. Same hoisting reason as exitGui / rescueGui above.
 global headerSubclassProcPtr := 0
+; Cached column header texts. Populated by InstallHeaderDarkSubclass(lv, columns)
+; and read by HeaderSubclassProc during WM_PAINT. Used instead of HDM_GETITEMW
+; because querying header item text via SendMessage-to-self from inside our WM_PAINT
+; failed to return text (HDM_GETITEMW returned bogus values; textBuf stayed empty).
+; The cached approach works because column headers are static for this dialog.
+global headerSubclassColumns := []
 
 ;==============================================================================
 ; Triggers
@@ -1524,8 +1530,8 @@ ShowRescueDialog(survivors) {
     txtIntro := rescueGui.AddText("xm w612", intro)
     rescueGui.txtIntro := txtIntro
 
-    LV := rescueGui.AddListView("xm w612 r10 +Checked +Grid",
-        ["Process", "Window title", "Hidden at"])
+    columnHeaders := ["Process", "Window title", "Hidden at"]
+    LV := rescueGui.AddListView("xm w612 r10 +Checked +Grid", columnHeaders)
     LV.ModifyCol(1, 130)
     LV.ModifyCol(2, 380)
     LV.ModifyCol(3, 80)
@@ -1550,8 +1556,9 @@ ShowRescueDialog(survivors) {
     rescueGui.btnCancel          := btnCancel
 
     ; Subclass the LV's header for dark-theme rendering. Must precede the first
-    ; paint, so we install before ApplyThemeToRescue + Show.
-    InstallHeaderDarkSubclass(LV)
+    ; paint, so we install before ApplyThemeToRescue + Show. The columns array is
+    ; cached for the subclass to read during WM_PAINT (HDM_GETITEMW failed at runtime).
+    InstallHeaderDarkSubclass(LV, columnHeaders)
 
     ApplyThemeToRescue()
 
@@ -1753,8 +1760,8 @@ RgbHexToBgr(rgbHex) {
 ; (the rescue dialog installs the subclass during Initialize, before this point in
 ; source order). See the v1.0.7 globals block near the State section.
 
-InstallHeaderDarkSubclass(lv) {
-    global headerSubclassProcPtr
+InstallHeaderDarkSubclass(lv, columns) {
+    global headerSubclassProcPtr, headerSubclassColumns
     if (!IsObject(lv))
         return
     if (headerSubclassProcPtr)
@@ -1765,6 +1772,7 @@ InstallHeaderDarkSubclass(lv) {
     if (!hdr)
         return
 
+    headerSubclassColumns := columns
     headerSubclassProcPtr := CallbackCreate(HeaderSubclassProc, "F", 6)
     DllCall("comctl32\SetWindowSubclass"
         , "Ptr", hdr
@@ -1774,7 +1782,7 @@ InstallHeaderDarkSubclass(lv) {
 }
 
 UninstallHeaderDarkSubclass(lv) {
-    global headerSubclassProcPtr
+    global headerSubclassProcPtr, headerSubclassColumns
     if (!headerSubclassProcPtr)
         return
     if (IsObject(lv)) {
@@ -1788,13 +1796,14 @@ UninstallHeaderDarkSubclass(lv) {
     }
     try CallbackFree(headerSubclassProcPtr)
     headerSubclassProcPtr := 0
+    headerSubclassColumns := []
 }
 
 HeaderSubclassProc(hWnd, msg, wParam, lParam, uIdSubclass, dwRefData) {
     ; Win32 WindowProc-shaped subclass procedure. Called by comctl32 on the
     ; window's thread (no marshaling concerns). Reads themeState at call time
     ; so live theme toggles flip behavior without reinstalling.
-    global themeState
+    global themeState, headerSubclassColumns
 
     ; Light mode: pass through to native rendering.
     if (themeState != "dark")
@@ -1841,32 +1850,20 @@ HeaderSubclassProc(hWnd, msg, wParam, lParam, uIdSubclass, dwRefData) {
             oldFont := DllCall("SelectObject", "Ptr", hdc, "Ptr", hFont, "Ptr")
 
         ; Iterate header items. HDM_GETITEMCOUNT = 0x1200. HDM_GETITEMRECT = 0x1207.
-        ; HDM_GETITEMW = 0x1213. HDI_TEXT mask = 0x02.
+        ; Column text comes from the cached headerSubclassColumns array (set at install
+        ; time). HDM_GETITEMW failed when called from inside our WM_PAINT (textBuf
+        ; stayed empty; return value was bogus) so we use the upfront-known column
+        ; names instead.
         count := DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x1200, "Ptr", 0, "Ptr", 0, "Ptr")
-
-        try FileAppend(Format("[{1}] HeaderPaint count={2} hFont=0x{3:X}`r`n",
-            A_Now, count, hFont), A_Temp "\mtt-header-debug.log")
 
         Loop count {
             i := A_Index - 1
             itemRc := Buffer(16, 0)
-            rcRet := DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x1207, "Ptr", i, "Ptr", itemRc, "Ptr")
+            DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x1207, "Ptr", i, "Ptr", itemRc)
 
-            ; HDITEMW on x64: mask(4) + cxy(4) + pszText@8(8) + hbm@16(8) + cchTextMax@24(4) + ...
-            textBuf := Buffer(256 * 2, 0)
-            hdi := Buffer(80, 0)
-            NumPut("UInt", 0x02,         hdi,  0)    ; mask = HDI_TEXT
-            NumPut("Ptr",  textBuf.Ptr,  hdi,  8)    ; pszText
-            NumPut("Int",  256,          hdi, 24)    ; cchTextMax
-            getRet := DllCall("SendMessageW", "Ptr", hWnd, "UInt", 0x1213, "Ptr", i, "Ptr", hdi, "Ptr")
-            itemText := StrGet(textBuf, "UTF-16")
-
-            try FileAppend(Format("[{1}]   item={2} rcRet={3} rect=({4},{5},{6},{7}) getRet={8} text='{9}' len={10}`r`n",
-                A_Now, i, rcRet,
-                NumGet(itemRc, 0, "Int"), NumGet(itemRc, 4, "Int"),
-                NumGet(itemRc, 8, "Int"), NumGet(itemRc, 12, "Int"),
-                getRet, itemText, StrLen(itemText)),
-                A_Temp "\mtt-header-debug.log")
+            itemText := (i + 1 <= headerSubclassColumns.Length)
+                ? headerSubclassColumns[i + 1]
+                : ""
 
             ; Draw text with 6px left/right inset, vertical center, single-line, ellipsis.
             textRc := Buffer(16, 0)
