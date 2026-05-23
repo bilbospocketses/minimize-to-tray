@@ -1465,12 +1465,7 @@ ShowRescueDialog(survivors) {
     rescueGui.entries := survivors
     for entry in survivors {
         timeShort := SubStr(entry.hiddenAt, 12, 5)   ; "HH:mm" from "YYYY-MM-DDTHH:mm:ssZ"
-        row := LV.Add("Check", entry.procName, entry.title, timeShort)
-    }
-    ; Check all rows by default
-    rowIdx := 0
-    while (rowIdx := LV.GetNext(rowIdx, "")) {
-        LV.Modify(rowIdx, "Check")
+        LV.Add("Check", entry.procName, entry.title, timeShort)
     }
     rescueGui.lv := LV
 
@@ -1500,7 +1495,7 @@ ApplyThemeToRescue() {
     ; ListView header + body coloring is limited in AHK Gui - we apply the body
     ; color (close enough for both themes) and leave the header as system-default.
     if (IsObject(rescueGui.lv)) {
-        try rescueGui.lv.Opt("Background" pal.bg " c" pal.text)
+        try rescueGui.lv.Opt("Background" pal.bg " c" pal.title)
         try rescueGui.lv.Redraw()
     }
 
