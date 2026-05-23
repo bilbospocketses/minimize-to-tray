@@ -1543,29 +1543,46 @@ ShowRescueDialog(survivors) {
     ; widths are what we use anyway (ModifyCol below).
     ; Label x-positions are offset 6px from each column's left edge to align with the
     ; LV's internal column text padding.
+    sepHorizTop := rescueGui.AddText("xm y+8 w612 h1", "")
+
     rescueGui.SetFont("s10 Bold", "Segoe UI")
-    txtColProcess := rescueGui.AddText("xm+6 w124",     "Process")
-    txtColTitle   := rescueGui.AddText("x+6 yp w374",   "Window title")
-    txtColTime    := rescueGui.AddText("x+6 yp w74",    "Hidden at")
+    txtColProcess := rescueGui.AddText("xm+6 y+2 w124",  "Process")
+    txtColTitle   := rescueGui.AddText("x+6 yp w374",    "Window title")
+    txtColTime    := rescueGui.AddText("x+6 yp w74",     "Hidden at")
     rescueGui.SetFont("s10 Norm", "Segoe UI")
     rescueGui.colHeaders := [txtColProcess, txtColTitle, txtColTime]
 
-    ; Grid-style separators so labels visually attach to the LV grid below:
-    ;   * 2 vertical 1px Text controls at the column boundaries (overlap label row)
-    ;   * 1 horizontal 1px Text control between labels and LV (full LV width)
-    ; Vertical column boundaries are LV-relative x=130 and x=510. LV starts at xm=14,
-    ; so absolute separator positions are x=144 and x=524 (matches LV's auto grid).
-    txtColProcess.GetPos(&lblX, &lblY, &lblW, &lblH)
-    sepVert1 := rescueGui.AddText("x" (14 + 130) " y" lblY " w1 h" lblH, "")
-    sepVert2 := rescueGui.AddText("x" (14 + 510) " y" lblY " w1 h" lblH, "")
-    sepHoriz := rescueGui.AddText("xm y+0 w612 h1", "")
-    rescueGui.colSeparators := [sepVert1, sepVert2, sepHoriz]
+    sepHorizBottom := rescueGui.AddText("xm y+2 w612 h1", "")
 
     LV := rescueGui.AddListView("xm y+0 w612 r10 -Hdr +Checked +Grid",
         ["Process", "Window title", "Hidden at"])
     LV.ModifyCol(1, 130)
     LV.ModifyCol(2, 380)
     LV.ModifyCol(3, 80)
+
+    ; Vertical column separators - 5 total to frame the header row + match LV grid:
+    ;   * outer-left, outer-right (match LV's outer border)
+    ;   * 3 column-end dividers (Process|Title, Title|Hidden, Hidden|phantom right gutter)
+    ; Positions derived from LVM_GETCOLUMNWIDTH (=0x101D) for pixel-accurate alignment
+    ; with the LV's auto-drawn grid lines, instead of trusting ModifyCol's nominal widths.
+    LV.GetPos(&lvX, , &lvW, )
+    col1W := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 0, "Ptr", 0, "Ptr")
+    col2W := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 1, "Ptr", 0, "Ptr")
+    col3W := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 2, "Ptr", 0, "Ptr")
+
+    sepHorizTop.GetPos(, &topY, , )
+    sepHorizBottom.GetPos(, &botY, , &botH)
+    vertY := topY
+    vertH := (botY + botH) - topY
+
+    vertOuterL := rescueGui.AddText("x" lvX                              " y" vertY " w1 h" vertH, "")
+    vertCol1   := rescueGui.AddText("x" (lvX + col1W)                    " y" vertY " w1 h" vertH, "")
+    vertCol2   := rescueGui.AddText("x" (lvX + col1W + col2W)            " y" vertY " w1 h" vertH, "")
+    vertCol3   := rescueGui.AddText("x" (lvX + col1W + col2W + col3W)    " y" vertY " w1 h" vertH, "")
+    vertOuterR := rescueGui.AddText("x" (lvX + lvW - 1)                  " y" vertY " w1 h" vertH, "")
+
+    rescueGui.colSeparators := [sepHorizTop, sepHorizBottom,
+                                 vertOuterL, vertCol1, vertCol2, vertCol3, vertOuterR]
 
     ; Stash survivor entries on the LV via a parallel array (LV row index -> entry).
     rescueGui.entries := survivors
