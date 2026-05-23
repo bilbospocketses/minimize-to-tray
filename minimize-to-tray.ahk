@@ -1203,6 +1203,42 @@ JsonUnescapeString(s) {
     return s
 }
 
+FindJsonBalanced(text, startPos, openChar, closeChar) {
+    ; Walk `text` starting at the openChar at `startPos`, respecting string
+    ; literals ("..." with backslash escapes), until the matching closeChar.
+    ; Used to locate array / object boundaries without being fooled by
+    ; literal `]` or `}` inside string fields (e.g., window titles like
+    ; "[3] Notifications - Chrome" or "[Working] file.ts").
+    ; Returns the 1-based position of the matching closeChar, or 0 if not found.
+    if (SubStr(text, startPos, 1) != openChar)
+        return 0
+    depth     := 1
+    inString  := false
+    escape    := false
+    i         := startPos + 1
+    len       := StrLen(text)
+    while (i <= len) {
+        ch := SubStr(text, i, 1)
+        if (escape) {
+            escape := false
+        } else if (ch == "\") {
+            escape := true
+        } else if (ch == '"') {
+            inString := !inString
+        } else if (!inString) {
+            if (ch == openChar) {
+                depth++
+            } else if (ch == closeChar) {
+                depth--
+                if (depth == 0)
+                    return i
+            }
+        }
+        i++
+    }
+    return 0
+}
+
 JsonDecodeHiddenState(text) {
     ; Returns Array of entries with .hwnd/.pid (Integer) and .procName/.procPath/.title/.hiddenAt (String).
     ; Returns [] on any parse failure - we re-write fresh on next operation.
@@ -1216,7 +1252,7 @@ JsonDecodeHiddenState(text) {
     pos := InStr(text, "[", , pos)
     if (!pos)
         return out
-    end := InStr(text, "]", , pos)
+    end := FindJsonBalanced(text, pos, "[", "]")
     if (!end)
         return out
     body := SubStr(text, pos + 1, end - pos - 1)
@@ -1227,7 +1263,7 @@ JsonDecodeHiddenState(text) {
         objStart := InStr(body, "{", , p)
         if (!objStart)
             break
-        objEnd := InStr(body, "}", , objStart)
+        objEnd := FindJsonBalanced(body, objStart, "{", "}")
         if (!objEnd)
             break
         obj := SubStr(body, objStart, objEnd - objStart + 1)
