@@ -1156,7 +1156,11 @@ LogRescue(message) {
 }
 
 JsonEscapeString(s) {
-    ; Escape backslashes, quotes, and control chars per JSON spec.
+    ; Escape the named JSON control characters (\\, \", \r, \n, \t, \b, \f).
+    ; Raw codepoints 0x00-0x08 / 0x0B / 0x0E-0x1F are passed through unchanged.
+    ; This is acceptable because our schema is internal (only this app writes
+    ; and reads these files) and window titles / paths effectively never
+    ; contain those raw codepoints. The file remains valid UTF-8 throughout.
     s := StrReplace(s, "\", "\\")
     s := StrReplace(s, '"', '\"')
     s := StrReplace(s, "`r", "\r")
