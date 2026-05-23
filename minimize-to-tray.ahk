@@ -1336,3 +1336,32 @@ HiddenState_Read() {
 HiddenState_Clear() {
     HiddenState_AtomicWrite('{"version":1,"windows":[]}')
 }
+
+HiddenState_Append(hwnd, pid, procName, procPath, title) {
+    entries := HiddenState_Read()
+    ; Defensive: drop any existing entry for this hwnd (shouldn't happen, but cheap to enforce).
+    survivors := []
+    for entry in entries {
+        if (entry.hwnd != hwnd)
+            survivors.Push(entry)
+    }
+    survivors.Push({
+        hwnd: hwnd,
+        pid: pid,
+        procName: procName,
+        procPath: procPath,
+        title: title,
+        hiddenAt: FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ")
+    })
+    HiddenState_AtomicWrite(JsonEncodeHiddenState(survivors))
+}
+
+HiddenState_Remove(hwnd) {
+    entries := HiddenState_Read()
+    survivors := []
+    for entry in entries {
+        if (entry.hwnd != hwnd)
+            survivors.Push(entry)
+    }
+    HiddenState_AtomicWrite(JsonEncodeHiddenState(survivors))
+}
