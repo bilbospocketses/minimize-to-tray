@@ -99,6 +99,13 @@ global rescueGui           := 0    ; modal Gui handle while open; 0 otherwise
 global cleanupRestoreOnExit := true
 global exitGui              := 0   ; modal Gui handle for the exit confirmation
 
+; v1.0.7 ListView header subclass: CallbackCreate ptr kept alive while subclassed.
+; Hoisted up-here (not next to InstallHeaderDarkSubclass) because AHK v2 top-level
+; `global X := value` lines execute in source order during auto-exec - and the
+; rescue dialog's InstallHeaderDarkSubclass runs from inside Initialize() at the
+; top of the file. Same hoisting reason as exitGui / rescueGui above.
+global headerSubclassProcPtr := 0
+
 ;==============================================================================
 ; Triggers
 ;==============================================================================
@@ -1734,7 +1741,9 @@ RgbHexToBgr(rgbHex) {
 ; default subclass proc for native rendering.
 ;==============================================================================
 
-global headerSubclassProcPtr := 0    ; CallbackCreate ptr; kept alive while subclassed
+; headerSubclassProcPtr is declared at the top of the script for auto-exec ordering
+; (the rescue dialog installs the subclass during Initialize, before this point in
+; source order). See the v1.0.7 globals block near the State section.
 
 InstallHeaderDarkSubclass(lv) {
     global headerSubclassProcPtr
