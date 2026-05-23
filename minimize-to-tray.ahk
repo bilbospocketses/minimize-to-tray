@@ -1664,6 +1664,13 @@ RegisterOwnerDraw(ctrl, kind) {
     ; Win32 silently ignores post-creation TYPE changes (AHK v2 docs confirm this).
     global ownerDrawRegistry
     ownerDrawRegistry[ctrl.Hwnd] := kind
+    ; DIAG: log actual GWL_STYLE so we can verify BS_OWNERDRAW stuck. low nibble 0xB == ownerdraw.
+    try {
+        style := DllCall("GetWindowLongW", "Ptr", ctrl.Hwnd, "Int", -16, "UInt")
+        hasOD := ((style & 0xF) == 0xB) ? "YES" : "NO"
+        FileAppend(Format("[{1}] RegisterOwnerDraw kind={2} hwnd=0x{3:X} style=0x{4:X} BS_OWNERDRAW={5}`r`n",
+            A_Now, kind, ctrl.Hwnd, style, hasOD), A_Temp "\mtt-ownerdraw-debug.log")
+    }
 }
 
 RgbHexToBgr(rgbHex) {
@@ -1684,6 +1691,10 @@ OnGuiDrawItem(wParam, lParam, msg, hwnd) {
     global ownerDrawRegistry, themeState
 
     hwndItem  := NumGet(lParam, 24, "Ptr")
+    ; DIAG: log every WM_DRAWITEM so we can verify the message is reaching our handler at all.
+    try FileAppend(Format("[{1}] OnGuiDrawItem msg=0x{2:X} parent=0x{3:X} hwndItem=0x{4:X} known={5}`r`n",
+        A_Now, msg, hwnd, hwndItem, ownerDrawRegistry.Has(hwndItem) ? "YES" : "NO"),
+        A_Temp "\mtt-ownerdraw-debug.log")
     if (!ownerDrawRegistry.Has(hwndItem))
         return  ; not one of ours; let default handler run
 
