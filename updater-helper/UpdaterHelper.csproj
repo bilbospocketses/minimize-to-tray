@@ -1,7 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!--
+      WinExe (windows subsystem) instead of plain Exe (console subsystem) so the
+      helper doesn't briefly flash a console window when AHK spawns it via
+      WScript.Shell.Exec for the update check. stdout / stderr still pipe back
+      to AHK because we launch with redirected handles - WinExe just means
+      Windows doesn't allocate a console window on process start.
+    -->
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -10,7 +17,7 @@
 
     <AssemblyName>updater-helper</AssemblyName>
     <RootNamespace>MinimizeToTray.UpdaterHelper</RootNamespace>
-    <Version>1.0.3</Version>
+    <Version>1.0.4</Version>
     <Authors>Jamie Chapman</Authors>
     <Product>minimize-to-tray updater-helper</Product>
     <Description>Velopack update helper for minimize-to-tray. Invoked by the AHK script to check and apply updates.</Description>

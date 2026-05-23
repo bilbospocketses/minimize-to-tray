@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-05-23
+
+### Fixed
+- Brief console window flash when `updater-helper.exe` runs the update check. `UpdaterHelper.csproj` `<OutputType>` changed from `Exe` (console subsystem) to `WinExe` (windows subsystem) so Windows no longer allocates a console at process start. stdout / stderr still pipe back to AHK because the parent launches with redirected handles.
+
+### Added
+- Fire an update check whenever the About dialog opens (in addition to the existing 5-seconds-after-startup check). If the user keeps the app running for a long time and opens About, the dot reflects the latest state. Helper call is scheduled via `SetTimer(CheckForUpdateAsync, -1)` so the dialog renders first. If an update is detected while About is already open, the dot appears on the next open (live-injecting into an open dialog is deferred).
+
 ## [1.0.3] - 2026-05-23
 
 ### Added
@@ -52,7 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo hardened to CM-parity security baseline per the lockdown protocol: Dependabot alerts + automated security updates + secret scanning + push protection + Private Vulnerability Reporting all enabled. Actions allowlist active with `sha_pinning_required: true`. Squash-only merge policy. Branch ruleset on `main`: required signatures + linear history + PR-only changes + required status checks (`build-and-test` + `Scorecard analysis`). Tag ruleset on `refs/tags/v*`: required signatures + non-fast-forward + no deletion.
 - All workflow actions SHA-pinned to commit objects with precise `# vX.Y.Z` comments per the OpenSSF Scorecard imposter-commit verifier + Dependabot version-tracking lessons.
 
-[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.4
 [1.0.3]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.3
 [1.0.2]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.2
 [1.0.1]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.1

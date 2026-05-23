@@ -55,7 +55,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.3"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.4"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
@@ -557,6 +557,14 @@ ShowAbout(*) {
     ApplyThemeToAbout()
 
     aboutGui.Show("AutoSize Center")
+
+    ; Fire an update check on every About-open (in addition to the 5s-after-init
+    ; check from Initialize). SetTimer with -1 schedules the check on the next
+    ; message-loop tick so the dialog renders first - no perceived hitch.
+    ; If the check finds an update, UpdateAvailable flips and the blue dot will
+    ; appear on the NEXT About open. Live-injecting the dot into a currently-
+    ; open dialog is deliberately out of scope for v1.0.4.
+    SetTimer(CheckForUpdateAsync, -1)
 }
 
 CloseAbout() {
