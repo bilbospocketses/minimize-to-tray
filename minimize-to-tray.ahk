@@ -104,6 +104,13 @@ global exitGui              := 0   ; modal Gui handle for the exit confirmation
 ;==============================================================================
 #+z::MinimizeFocused()
 
+; v1.0.7 diagnostic hotkey. Dumps the active window's Win32 + DWM state to the
+; clipboard so we can characterize windows where WinHide is silently ignored
+; (Electron / Chromium with Win11 system backdrops). User runs against the target
+; app, then pastes the clipboard contents. No UI feedback - the paste itself is
+; the verification. Feeds v1.0.8's Electron-minimize fix design.
++Esc::DumpActiveWindow()
+
 #HotIf MouseOverTitleBar()
 MButton::MinimizeUnderCursor()
 #HotIf
@@ -854,6 +861,113 @@ MinimizeUnderCursor() {
         HideAndStash(rootHwnd)
     else
         HideAndStash(hwnd)
+}
+
+DumpActiveWindow() {
+    ; v1.0.7 diagnostic. Snapshots the active window's Win32 + DWM state to the
+    ; clipboard. Designed to characterize windows where WinHide is silently
+    ; ignored (Electron / Chromium with Win11 system backdrops). User paste the
+    ; clipboard contents into a chat / issue / file so we can design v1.0.8.
+    hwnd := WinGetID("A")
+    if (!hwnd) {
+        A_Clipboard := "minimize-to-tray diagnostic: no active window"
+        return
+    }
+
+    ; Basic window identity.
+    cls   := ""
+    title := ""
+    pid   := 0
+    try cls   := WinGetClass("ahk_id " hwnd)
+    try title := WinGetTitle("ahk_id " hwnd)
+    try pid   := WinGetPID("ahk_id " hwnd)
+
+    procName := ""
+    procPath := ""
+    try procName := WinGetProcessName("ahk_id " hwnd)
+    try procPath := WinGetProcessPath("ahk_id " hwnd)
+
+    ; Win32 styles via GetWindowLongW. GWL_STYLE = -16, GWL_EXSTYLE = -20.
+    style   := DllCall("GetWindowLongW", "Ptr", hwnd, "Int", -16, "UInt")
+    exStyle := DllCall("GetWindowLongW", "Ptr", hwnd, "Int", -20, "UInt")
+
+    ; Ancestor / owner chain. GA_ROOTOWNER = 3.
+    rootOwner := DllCall("GetAncestor", "Ptr", hwnd, "UInt", 3, "Ptr")
+
+    ; Window rect (screen coords).
+    rect := Buffer(16, 0)
+    DllCall("GetWindowRect", "Ptr", hwnd, "Ptr", rect)
+    rectL := NumGet(rect,  0, "Int")
+    rectT := NumGet(rect,  4, "Int")
+    rectR := NumGet(rect,  8, "Int")
+    rectB := NumGet(rect, 12, "Int")
+
+    ; DWM cloak state. DWMWA_CLOAKED = 14. Values: 0=none, 1=DWM_CLOAKED_APP,
+    ; 2=DWM_CLOAKED_SHELL, 4=DWM_CLOAKED_INHERITED.
+    cloaked := 0
+    cloakStr := "<query failed>"
+    try {
+        cloakBuf := Buffer(4, 0)
+        hr := DllCall("dwmapi\DwmGetWindowAttribute"
+            , "Ptr",  hwnd
+            , "UInt", 14
+            , "Ptr",  cloakBuf
+            , "UInt", 4)
+        if (hr = 0) {
+            cloaked := NumGet(cloakBuf, 0, "UInt")
+            cloakStr := (cloaked = 0) ? "0 (not cloaked)"
+                      : (cloaked = 1) ? "1 (DWM_CLOAKED_APP)"
+                      : (cloaked = 2) ? "2 (DWM_CLOAKED_SHELL)"
+                      : (cloaked = 4) ? "4 (DWM_CLOAKED_INHERITED)"
+                      : cloaked
+        }
+    }
+
+    ; DWMWA_SYSTEMBACKDROP_TYPE = 38 (Win11 22H2+). 0=auto, 1=none, 2=mainwindow
+    ; (Mica), 3=transient (acrylic), 4=tabbedwindow (Mica Alt). Fails on Win10 +
+    ; pre-22H2 Win11 - reported as "<unsupported>" in that case.
+    backdropStr := "<unsupported on this Windows build>"
+    try {
+        bdBuf := Buffer(4, 0)
+        hr := DllCall("dwmapi\DwmGetWindowAttribute"
+            , "Ptr",  hwnd
+            , "UInt", 38
+            , "Ptr",  bdBuf
+            , "UInt", 4)
+        if (hr = 0) {
+            bd := NumGet(bdBuf, 0, "UInt")
+            backdropStr := (bd = 0) ? "0 (auto)"
+                         : (bd = 1) ? "1 (none)"
+                         : (bd = 2) ? "2 (mainwindow / Mica)"
+                         : (bd = 3) ? "3 (transient / Acrylic)"
+                         : (bd = 4) ? "4 (tabbedwindow / Mica Alt)"
+                         : bd
+        }
+    }
+
+    ; Build the dump.
+    out := "minimize-to-tray Shift+Esc diagnostic`r`n"
+         . "==========================================`r`n"
+         . "Captured:        " FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ") "`r`n"
+         . "App version:     " APP_VERSION "`r`n"
+         . "OS:              " A_OSVersion "`r`n"
+         . "`r`n"
+         . "HWND:            0x" Format("{:X}", hwnd) "`r`n"
+         . "Class:           " cls "`r`n"
+         . "Title:           " title "`r`n"
+         . "Process:         " procName " (PID " pid ")`r`n"
+         . "Path:            " procPath "`r`n"
+         . "`r`n"
+         . "Window rect:     (" rectL "," rectT ")-(" rectR "," rectB ")"
+         . " [w=" (rectR - rectL) " h=" (rectB - rectT) "]`r`n"
+         . "GWL_STYLE:       0x" Format("{:08X}", style) "`r`n"
+         . "GWL_EXSTYLE:     0x" Format("{:08X}", exStyle) "`r`n"
+         . "GA_ROOTOWNER:    0x" Format("{:X}", rootOwner)
+            . ((rootOwner = hwnd) ? " (self)" : "") "`r`n"
+         . "DWMWA_CLOAKED:   " cloakStr "`r`n"
+         . "DWMWA_BACKDROP:  " backdropStr "`r`n"
+
+    A_Clipboard := out
 }
 
 ;==============================================================================
