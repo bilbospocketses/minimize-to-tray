@@ -394,7 +394,7 @@ GetThemePalette(name) {
             headerBg:     "2D2D2D",    ; v1.0.7: ListView header background
             headerFg:     "F2F2F2",    ; v1.0.7: ListView header text
             focusRing:    "4DA3FF",    ; v1.0.7: focus-ring inside owner-drawn controls
-            gridLine:     "6E6E6E"     ; v1.0.7: rescue header grid separators (matches LV body grid in dark mode)
+            gridLine:     "5A5A5A"     ; v1.0.7: rescue header grid separators (tuned to match LV body grid in dark mode)
         }
     }
     return {
@@ -417,7 +417,7 @@ GetThemePalette(name) {
         headerBg:     "F0F0F0",
         headerFg:     "000000",
         focusRing:    "0078D4",
-        gridLine:     "C8C8C8"        ; matches LV body grid in light mode
+        gridLine:     "BFBFBF"        ; matches LV body grid in light mode
     }
 }
 
@@ -1599,17 +1599,22 @@ ShowRescueDialog(survivors) {
     vertHdev := Round((vertY + vertH) * dpiScale) - vertYdev
     SWP      := 0x0014   ; SWP_NOZORDER | SWP_NOACTIVATE
 
+    ; LV has WS_BORDER (1px outer border). Outer verticals sit ON the border at lvXdev
+    ; and lvXdev+lvWdev-1. Inner verticals must use the LV's CLIENT origin which is
+    ; 1px inside the outer left border - hence the +1 below.
+    lvInnerX := lvXdev + 1
+
     DllCall("SetWindowPos", "Ptr", vertOuterL.Hwnd, "Ptr", 0,
         "Int", lvXdev,                                          "Int", vertYdev,
         "Int", 1, "Int", vertHdev, "UInt", SWP)
     DllCall("SetWindowPos", "Ptr", vertCol1.Hwnd,   "Ptr", 0,
-        "Int", lvXdev + col1Wdev,                                "Int", vertYdev,
+        "Int", lvInnerX + col1Wdev,                              "Int", vertYdev,
         "Int", 1, "Int", vertHdev, "UInt", SWP)
     DllCall("SetWindowPos", "Ptr", vertCol2.Hwnd,   "Ptr", 0,
-        "Int", lvXdev + col1Wdev + col2Wdev,                     "Int", vertYdev,
+        "Int", lvInnerX + col1Wdev + col2Wdev,                   "Int", vertYdev,
         "Int", 1, "Int", vertHdev, "UInt", SWP)
     DllCall("SetWindowPos", "Ptr", vertCol3.Hwnd,   "Ptr", 0,
-        "Int", lvXdev + col1Wdev + col2Wdev + col3Wdev,          "Int", vertYdev,
+        "Int", lvInnerX + col1Wdev + col2Wdev + col3Wdev,        "Int", vertYdev,
         "Int", 1, "Int", vertHdev, "UInt", SWP)
     DllCall("SetWindowPos", "Ptr", vertOuterR.Hwnd, "Ptr", 0,
         "Int", lvXdev + lvWdev - 1,                              "Int", vertYdev,
