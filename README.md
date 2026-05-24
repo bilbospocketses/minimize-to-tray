@@ -76,15 +76,13 @@ The About dialog contains:
 
 ### Middle-click on title bars: pass-through in apps that consume the click
 
-Modern apps with custom-drawn title bars (Chrome, Edge, Firefox, File Explorer, Office, VS Code, and others with tab strips) only report their actual drag-handle region as a "title bar" to Windows. If you middle-click on something *inside* their UI — a Chrome/Edge/Firefox tab, an Explorer tab, an Office ribbon — those apps consume the click for their own behavior (typically closing the tab) before our predicate sees it. Middle-clicking on the **empty drag region** at the top of those windows still works for minimizing.
+Modern apps with custom-drawn title bars (Chrome, Edge, Firefox, File Explorer, Office, VS Code, and others with tab strips) only report their actual drag-handle region as a "title bar" to Windows. If you middle-click on something *inside* their UI — a Chrome/Edge/Firefox tab, an Explorer tab, an Office ribbon — those apps consume the click for their own behavior (typically closing the tab) before our predicate sees it. Middle-clicking on the **empty drag region** at the top of those windows still works for minimizing most of them (but not all).
 
 `Win+Shift+Z` is the universal fallback: it works in every app, every time, regardless of how that app handles middle-click.
 
 ### Theme does not auto-follow live Windows-wide theme changes
 
-The theme is seeded from the Windows Apps theme on first install (or first launch for users upgrading from pre-v1.0.3), then persisted. If you later flip Windows Light↔Dark system-wide, the About dialog stays on whatever you last set. Flip the in-About toggle to bring it back in sync.
-
-Also, the native Checkbox and OK Button get best-effort label recoloring across themes — their box icon and button chrome stay Windows-native, which can look slightly off against the Dark background.
+The theme is seeded from the Windows Apps theme on first install (or first launch for users upgrading from pre-v1.0.3), then persisted. If you later flip Windows Light↔Dark system-wide, the About / rescue / exit dialogs stay on whatever you last set. Flip the in-About toggle to bring them back in sync.
 
 ### Windows 11 collapsed-tray-icons mode
 
