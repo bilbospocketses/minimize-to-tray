@@ -51,7 +51,15 @@ The app's own always-visible tray icon (separate from the per-app ones) has its 
 - **Single left-click** → opens **About**.
 - **Right-click** → menu with **About** / **Run on login** (toggle, checkmark reflects current state) / **Exit**.
 
-When the program exits cleanly, every hidden window is restored automatically.
+When you pick **Exit** with windows still in the tray, the app asks whether to **Restore & Exit** (default — bring everything back to the desktop and close), **Leave Hidden** (close the app but keep windows hidden — they'll resurface on the next launch via the rescue dialog), or **Cancel**. With no windows in the tray, Exit closes the app immediately.
+
+Non-user-initiated exits (logoff, shutdown, an in-place Velopack update, or a crash) keep the safe default and restore everything. Hidden windows that don't make it back through that path are recovered on the next launch via the rescue dialog described below.
+
+### Crash recovery / rescue mode
+
+If the app exits without cleaning up (force-killed via Task Manager, blue screen, power loss, or the **Leave Hidden** exit choice), the windows it had hidden in the tray stay hidden — not on the taskbar, no per-app tray icon. On the next launch, the app discovers the survivors (validating each one is still alive and the same process), opens a modal **Restore hidden windows** dialog listing what it found, and offers three buttons: **Restore Selected** brings the checked rows back to the desktop and sends the rest to the tray; **Restore All** brings everything back; **Send All to Tray** registers them as tray-managed without re-hiding (you can then interact with each via its per-app tray icon as normal). Closing the dialog without choosing behaves like Send All to Tray.
+
+Hidden-window state lives in `%LocalAppData%\bilbospocketses\minimize-to-tray\hidden.json` and survives across reboots — as long as the apps themselves are still running. Apps that close (or that the OS closes on logoff / restart) can't be recovered; the rescue dialog filters those out.
 
 ### About dialog
 
@@ -78,10 +86,6 @@ The theme is seeded from the Windows Apps theme on first install (or first launc
 
 Also, the native Checkbox and OK Button get best-effort label recoloring across themes — their box icon and button chrome stay Windows-native, which can look slightly off against the Dark background.
 
-### No crash recovery yet
-
-If the program crashes hard while windows are hidden, those windows stay hidden until you restart the owning app or end its process via Task Manager. Apps with auto-save (Word, browsers, etc.) survive cleanly. A `--rescue` mode that enumerates hidden top-level windows and offers to restore them is parked for a follow-up release.
-
 ### Windows 11 collapsed-tray-icons mode
 
 Per-app tray icons may hide in the overflow flyout. Functionality is identical, but you may want to pin the icons if you prefer them always visible.
@@ -89,6 +93,20 @@ Per-app tray icons may hide in the overflow flyout. Functionality is identical, 
 ### SmartScreen warning on first run
 
 Releases are unsigned today. SmartScreen surfaces a warning on first run — click "More info" → "Run anyway". Code signing is a planned follow-up.
+
+## Troubleshooting
+
+### A window stays visible after `Win+Shift+Z` or middle-click
+
+Some app + Windows + display-config combinations have intermittently shown the tray icon being created (`WinHide` returning success) but the window staying visibly painted on the desktop. The pattern has been hard to characterize because it's intermittent — the same app that exhibits the bug one day works correctly the next.
+
+If you can reproduce this, please help us diagnose. While the misbehaving window is **focused**:
+
+1. Press **`Shift+Esc`** — the app silently captures the active window's Win32 + DWM state to your clipboard.
+2. Open a [new issue](https://github.com/bilbospocketses/minimize-to-tray/issues/new) and paste the clipboard contents into the issue body.
+3. Describe what you saw — which trigger (`Win+Shift+Z` or middle-click), what was visible before / after, whether the tray icon appeared, whether `Win+Shift+Z` (the universal fallback) eventually worked, and anything you'd done with the window just before (resized / maximized / moved between monitors).
+
+The dump contains window class, title, process name + path, position, Win32 styles, and DWM cloak / system-backdrop state. No personal data beyond the window title (which often contains a file path or document name — feel free to redact before pasting).
 
 ## Requirements
 

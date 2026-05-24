@@ -55,7 +55,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.6"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.7"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
@@ -85,10 +85,31 @@ global APP_REG_KEY                 := "HKEY_CURRENT_USER\Software\bilbospocketse
 global FIRST_RUN_PENDING_REG_VALUE := "FirstRunPending"
 global APP_THEME_REG_VALUE         := "Theme"
 
+; v1.0.7 rescue mode: persistent hidden-window tracking + diagnostic state.
+; APP_DATA_DIR is %LOCALAPPDATA%\bilbospocketses\minimize-to-tray\, created in Initialize().
+global APP_DATA_DIR        := ""
+global HIDDEN_STATE_FILE   := ""
+global HIDDEN_STATE_TMP    := ""
+global RESCUE_LOG_FILE     := ""
+global rescueGui           := 0    ; modal Gui handle while open; 0 otherwise
+
+; v1.0.7 exit flow: default-true so any non-user-initiated exit (logoff, shutdown,
+; Velopack update, crash) restores hidden windows for safety. User-initiated Exit
+; via the tray menu opens a confirmation dialog that may flip this to false.
+global cleanupRestoreOnExit := true
+global exitGui              := 0   ; modal Gui handle for the exit confirmation
+
 ;==============================================================================
 ; Triggers
 ;==============================================================================
 #+z::MinimizeFocused()
+
+; v1.0.7 diagnostic hotkey. Dumps the active window's Win32 + DWM state to the
+; clipboard so we can characterize windows where WinHide is silently ignored
+; (Electron / Chromium with Win11 system backdrops). User runs against the target
+; app, then pastes the clipboard contents. No UI feedback - the paste itself is
+; the verification. Feeds v1.0.8's Electron-minimize fix design.
++Esc::DumpActiveWindow()
 
 #HotIf MouseOverTitleBar()
 MButton::MinimizeUnderCursor()
@@ -185,6 +206,18 @@ Initialize() {
         appImagePath := A_ScriptDir "\assets\app.png"
     }
 
+    ; Resolve app-data paths (rescue state + log). Falls back to A_AppData if
+    ; LOCALAPPDATA is empty (rare but possible in stripped service-account profiles).
+    global APP_DATA_DIR, HIDDEN_STATE_FILE, HIDDEN_STATE_TMP, RESCUE_LOG_FILE
+    base := EnvGet("LOCALAPPDATA")
+    if (base == "")
+        base := A_AppData
+    APP_DATA_DIR      := base "\bilbospocketses\minimize-to-tray"
+    HIDDEN_STATE_FILE := APP_DATA_DIR "\hidden.json"
+    HIDDEN_STATE_TMP  := APP_DATA_DIR "\hidden.json.tmp"
+    RESCUE_LOG_FILE   := APP_DATA_DIR "\rescue.log"
+    try DirCreate(APP_DATA_DIR)
+
     ; Always-visible app tray icon tooltip
     A_IconTip := "minimize-to-tray`n"
               .  "Win+Shift+Z or`n"
@@ -196,7 +229,7 @@ Initialize() {
     A_TrayMenu.Add()
     A_TrayMenu.Add(RUN_MENU_LABEL, ToggleRunOnLoginFromMenu)
     A_TrayMenu.Add()
-    A_TrayMenu.Add("E&xit", (*) => ExitApp())
+    A_TrayMenu.Add("E&xit", ConfirmExitFromMenu)
     A_TrayMenu.Default := "&About"
     A_TrayMenu.ClickCount := 1   ; single left-click on the app tray icon opens About (default item)
 
@@ -214,6 +247,14 @@ Initialize() {
         if (A_IsCompiled)
             try RegWrite(themeState, "REG_SZ", APP_REG_KEY, APP_THEME_REG_VALUE)
     }
+
+    ; v1.0.7: set process-level dark/light mode preference BEFORE any Gui is created
+    ; (RescueOrphanedWindows below may create the rescue dialog). SetPreferredAppMode
+    ; affects which theme class new controls receive by default.
+    ApplyAppDarkMode(themeState)
+
+    ; v1.0.7: surface any windows orphaned by a prior crashed session.
+    RescueOrphanedWindows()
 
     ; Register destroy hook for orphan cleanup.
     ; No "F" (Fast) option - we want the callback marshaled to AHK's main thread
@@ -341,27 +382,49 @@ OnAboutRunOnLoginToggle(ctrl, *) {
 GetThemePalette(name) {
     if (name = "dark") {
         return {
-            bg:         "1F1F1F",
-            title:      "F2F2F2",
-            version:    "A0A0A0",
-            shortcut:   "F2F2F2",
-            italic:     "B8B8B8",
-            url:        "4DA3FF",
-            checkbox:   "F2F2F2",
-            okButton:   "F2F2F2",
-            themeGlyph: ""           ; emoji moon is color-locked; tint is ignored
+            bg:           "1F1F1F",
+            title:        "F2F2F2",
+            version:      "A0A0A0",
+            shortcut:     "F2F2F2",
+            italic:       "B8B8B8",
+            url:          "4DA3FF",
+            checkbox:     "F2F2F2",
+            okButton:     "F2F2F2",
+            themeGlyph:   "",          ; emoji moon is color-locked; tint is ignored
+            text:         "F2F2F2",    ; v1.0.7: rescue dialog body text
+            buttonBg:     "2D2D2D",    ; v1.0.7: owner-drawn button fill (normal)
+            buttonFg:     "F2F2F2",    ; v1.0.7: owner-drawn button text
+            buttonBorder: "4D4D4D",    ; v1.0.7: owner-drawn button border
+            buttonHover:  "383838",    ; v1.0.7: owner-drawn button fill (hover, deferred)
+            buttonPressed:"252525",    ; v1.0.7: owner-drawn button fill (pressed)
+            buttonDefault:"4DA3FF",    ; v1.0.7: default-pushbutton accent border
+            headerBg:     "2D2D2D",    ; v1.0.7: ListView header background
+            headerFg:     "F2F2F2",    ; v1.0.7: ListView header text
+            focusRing:    "4DA3FF",    ; v1.0.7: focus-ring inside owner-drawn controls
+            gridLine:     "5A5A5A"     ; v1.0.7: rescue header grid separators (tuned to match LV body grid in dark mode)
         }
     }
     return {
-        bg:         "FFFFFF",
-        title:      "000000",
-        version:    "707070",
-        shortcut:   "000000",
-        italic:     "606060",
-        url:        "0066CC",
-        checkbox:   "000000",
-        okButton:   "000000",
-        themeGlyph: "D9A300"          ; gold sun
+        bg:           "FFFFFF",
+        title:        "000000",
+        version:      "707070",
+        shortcut:     "000000",
+        italic:       "606060",
+        url:          "0066CC",
+        checkbox:     "000000",
+        okButton:     "000000",
+        themeGlyph:   "D9A300",        ; gold sun
+        text:         "000000",
+        buttonBg:     "FDFDFD",
+        buttonFg:     "000000",
+        buttonBorder: "D1D1D1",
+        buttonHover:  "F5F5F5",
+        buttonPressed:"E6E6E6",
+        buttonDefault:"0078D4",
+        headerBg:     "F0F0F0",
+        headerFg:     "000000",
+        focusRing:    "0078D4",
+        gridLine:     "BFBFBF"        ; matches LV body grid in light mode
     }
 }
 
@@ -403,6 +466,10 @@ ApplyThemeToAbout() {
     ; DWMWA_USE_IMMERSIVE_DARK_MODE, supported on Win10 19041+ and all Win11.
     SetAboutTitleBarDark(themeState = "dark")
 
+    ; v1.0.7: uxtheme dark-mode private API - theme native controls (OK button,
+    ; Run-on-login checkbox, ListView if any) via SetWindowTheme("DarkMode_Explorer").
+    ApplyDarkModeToGui(aboutGui, themeState)
+
     ; Force a top-level repaint so the BackColor change is visible immediately
     try aboutGui.Show("NoActivate")
 }
@@ -425,6 +492,8 @@ ToggleTheme(*) {
     if (A_IsCompiled) {
         try RegWrite(themeState, "REG_SZ", APP_REG_KEY, APP_THEME_REG_VALUE)
     }
+    ; Update process-level preferred app mode for any new windows / controls.
+    ApplyAppDarkMode(themeState)
     ApplyThemeToAbout()
 }
 
@@ -794,12 +863,117 @@ MinimizeUnderCursor() {
         HideAndStash(hwnd)
 }
 
+DumpActiveWindow() {
+    ; v1.0.7 diagnostic. Snapshots the active window's Win32 + DWM state to the
+    ; clipboard. Designed to characterize windows where WinHide is silently
+    ; ignored (Electron / Chromium with Win11 system backdrops). User paste the
+    ; clipboard contents into a chat / issue / file so we can design v1.0.8.
+    hwnd := WinGetID("A")
+    if (!hwnd) {
+        A_Clipboard := "minimize-to-tray diagnostic: no active window"
+        return
+    }
+
+    ; Basic window identity.
+    cls   := ""
+    title := ""
+    pid   := 0
+    try cls   := WinGetClass("ahk_id " hwnd)
+    try title := WinGetTitle("ahk_id " hwnd)
+    try pid   := WinGetPID("ahk_id " hwnd)
+
+    procName := ""
+    procPath := ""
+    try procName := WinGetProcessName("ahk_id " hwnd)
+    try procPath := WinGetProcessPath("ahk_id " hwnd)
+
+    ; Win32 styles via GetWindowLongW. GWL_STYLE = -16, GWL_EXSTYLE = -20.
+    style   := DllCall("GetWindowLongW", "Ptr", hwnd, "Int", -16, "UInt")
+    exStyle := DllCall("GetWindowLongW", "Ptr", hwnd, "Int", -20, "UInt")
+
+    ; Ancestor / owner chain. GA_ROOTOWNER = 3.
+    rootOwner := DllCall("GetAncestor", "Ptr", hwnd, "UInt", 3, "Ptr")
+
+    ; Window rect (screen coords).
+    rect := Buffer(16, 0)
+    DllCall("GetWindowRect", "Ptr", hwnd, "Ptr", rect)
+    rectL := NumGet(rect,  0, "Int")
+    rectT := NumGet(rect,  4, "Int")
+    rectR := NumGet(rect,  8, "Int")
+    rectB := NumGet(rect, 12, "Int")
+
+    ; DWM cloak state. DWMWA_CLOAKED = 14. Values: 0=none, 1=DWM_CLOAKED_APP,
+    ; 2=DWM_CLOAKED_SHELL, 4=DWM_CLOAKED_INHERITED.
+    cloaked := 0
+    cloakStr := "<query failed>"
+    try {
+        cloakBuf := Buffer(4, 0)
+        hr := DllCall("dwmapi\DwmGetWindowAttribute"
+            , "Ptr",  hwnd
+            , "UInt", 14
+            , "Ptr",  cloakBuf
+            , "UInt", 4)
+        if (hr = 0) {
+            cloaked := NumGet(cloakBuf, 0, "UInt")
+            cloakStr := (cloaked = 0) ? "0 (not cloaked)"
+                      : (cloaked = 1) ? "1 (DWM_CLOAKED_APP)"
+                      : (cloaked = 2) ? "2 (DWM_CLOAKED_SHELL)"
+                      : (cloaked = 4) ? "4 (DWM_CLOAKED_INHERITED)"
+                      : cloaked
+        }
+    }
+
+    ; DWMWA_SYSTEMBACKDROP_TYPE = 38 (Win11 22H2+). 0=auto, 1=none, 2=mainwindow
+    ; (Mica), 3=transient (acrylic), 4=tabbedwindow (Mica Alt). Fails on Win10 +
+    ; pre-22H2 Win11 - reported as "<unsupported>" in that case.
+    backdropStr := "<unsupported on this Windows build>"
+    try {
+        bdBuf := Buffer(4, 0)
+        hr := DllCall("dwmapi\DwmGetWindowAttribute"
+            , "Ptr",  hwnd
+            , "UInt", 38
+            , "Ptr",  bdBuf
+            , "UInt", 4)
+        if (hr = 0) {
+            bd := NumGet(bdBuf, 0, "UInt")
+            backdropStr := (bd = 0) ? "0 (auto)"
+                         : (bd = 1) ? "1 (none)"
+                         : (bd = 2) ? "2 (mainwindow / Mica)"
+                         : (bd = 3) ? "3 (transient / Acrylic)"
+                         : (bd = 4) ? "4 (tabbedwindow / Mica Alt)"
+                         : bd
+        }
+    }
+
+    ; Build the dump.
+    out := "minimize-to-tray Shift+Esc diagnostic`r`n"
+         . "==========================================`r`n"
+         . "Captured:        " FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ") "`r`n"
+         . "App version:     " APP_VERSION "`r`n"
+         . "OS:              " A_OSVersion "`r`n"
+         . "`r`n"
+         . "HWND:            0x" Format("{:X}", hwnd) "`r`n"
+         . "Class:           " cls "`r`n"
+         . "Title:           " title "`r`n"
+         . "Process:         " procName " (PID " pid ")`r`n"
+         . "Path:            " procPath "`r`n"
+         . "`r`n"
+         . "Window rect:     (" rectL "," rectT ")-(" rectR "," rectB ")"
+         . " [w=" (rectR - rectL) " h=" (rectB - rectT) "]`r`n"
+         . "GWL_STYLE:       0x" Format("{:08X}", style) "`r`n"
+         . "GWL_EXSTYLE:     0x" Format("{:08X}", exStyle) "`r`n"
+         . "GA_ROOTOWNER:    0x" Format("{:X}", rootOwner)
+            . ((rootOwner = hwnd) ? " (self)" : "") "`r`n"
+         . "DWMWA_CLOAKED:   " cloakStr "`r`n"
+         . "DWMWA_BACKDROP:  " backdropStr "`r`n"
+
+    A_Clipboard := out
+}
+
 ;==============================================================================
 ; Core flow
 ;==============================================================================
 HideAndStash(hwnd) {
-    global Groups, nextTrayUid
-
     try {
         pid      := WinGetPID("ahk_id " hwnd)
         procName := ProcessGetName(pid)
@@ -808,40 +982,65 @@ HideAndStash(hwnd) {
         return  ; window died or we cannot see it
     }
 
-    if (Groups.Has(procName)) {
-        ; Push onto existing group
-        group := Groups[procName]
-        group.windows.Push(hwnd)
-    } else {
-        ; First window of this type - create new group + new tray icon
-        hIcon := GetExeIcon(exePath)
-        if (!hIcon) {
-            ; Fall back to generic app icon
-            hIcon := DllCall("LoadIconW", "Ptr", 0, "Ptr", 32512, "Ptr")
-        }
-        uid := nextTrayUid
-        nextTrayUid++
-
-        result := ShellNotifyAdd(uid, hIcon, procName)
-        if (!result) {
-            ; Retry once after 500ms
-            Sleep(500)
-            result := ShellNotifyAdd(uid, hIcon, procName)
-        }
-        if (!result) {
-            MsgBox("Shell_NotifyIcon(NIM_ADD) failed twice for " procName ". Aborting minimize.",
-                   "minimize-to-tray", "IconX")
-            DllCall("DestroyIcon", "Ptr", hIcon)
-            return
-        }
-
-        Groups[procName] := { windows: [hwnd], trayUid: uid, hIcon: hIcon }
-        group := Groups[procName]
-    }
+    ; Register in tray group system (creates group + icon if first window of this type)
+    if (!RegisterTrayGroup(hwnd, pid, procName, exePath))
+        return  ; ShellNotifyAdd failed twice, error already shown
 
     WinHide("ahk_id " hwnd)
 
-    ; Update tooltip with count
+    ; v1.0.7: persist this hide so the next session can rescue it if we crash.
+    try {
+        title := WinGetTitle("ahk_id " hwnd)
+        HiddenState_Append(hwnd, pid, procName, exePath, title)
+    } catch as e {
+        LogRescue("HideAndStash: HiddenState_Append failed for hwnd=" hwnd ": " e.Message)
+    }
+
+    UpdateGroupTooltip(procName)
+}
+
+RegisterTrayGroup(hwnd, pid, procName, exePath) {
+    ; Shared private helper used by HideAndStash and StashAlreadyHidden.
+    ; Adds hwnd to the procName group (creating + registering tray icon if needed).
+    ; Returns true on success, false if Shell_NotifyIcon registration failed.
+    global Groups, nextTrayUid
+
+    if (Groups.Has(procName)) {
+        Groups[procName].windows.Push(hwnd)
+        return true
+    }
+
+    ; First window of this type - create new group + new tray icon
+    hIcon := GetExeIcon(exePath)
+    if (!hIcon)
+        hIcon := DllCall("LoadIconW", "Ptr", 0, "Ptr", 32512, "Ptr")
+
+    uid := nextTrayUid
+    nextTrayUid++
+
+    result := ShellNotifyAdd(uid, hIcon, procName)
+    if (!result) {
+        Sleep(500)
+        result := ShellNotifyAdd(uid, hIcon, procName)
+    }
+    if (!result) {
+        MsgBox("Shell_NotifyIcon(NIM_ADD) failed twice for " procName ". Aborting minimize.",
+               "minimize-to-tray", "IconX")
+        DllCall("DestroyIcon", "Ptr", hIcon)
+        return false
+    }
+
+    Groups[procName] := { windows: [hwnd], trayUid: uid, hIcon: hIcon }
+    return true
+}
+
+StashAlreadyHidden(hwnd, pid, procName, exePath) {
+    ; Rescue path: window is already hidden from a previous session. We just
+    ; need to re-register it in Groups + tray. The hidden.json entry was
+    ; written by the previous session and stays in place (preserved across
+    ; this session's RegisterTrayGroup call - we do NOT call HiddenState_Append).
+    if (!RegisterTrayGroup(hwnd, pid, procName, exePath))
+        return
     UpdateGroupTooltip(procName)
 }
 
@@ -883,6 +1082,9 @@ RestoreSpecific(procName, hwnd, *) {
         WinShow("ahk_id " hwnd)
         WinActivate("ahk_id " hwnd)
     }
+    try HiddenState_Remove(hwnd)
+    catch as e
+        LogRescue("RestoreSpecific: HiddenState_Remove failed for hwnd=" hwnd ": " e.Message)
     if (group.windows.Length == 0)
         DestroyGroup(procName)
     else
@@ -902,6 +1104,9 @@ RestoreAll(procName, *) {
             WinShow("ahk_id " hwnd)
             WinActivate("ahk_id " hwnd)
         }
+        try HiddenState_Remove(hwnd)
+        catch as e
+            LogRescue("RestoreAll: HiddenState_Remove failed for hwnd=" hwnd ": " e.Message)
         i--
     }
     group.windows := []
@@ -1026,6 +1231,9 @@ OnTrayMessage(wParam, lParam, msg, hwnd) {
             WinShow("ahk_id " targetHwnd)
             WinActivate("ahk_id " targetHwnd)
         }
+        try HiddenState_Remove(targetHwnd)
+        catch as e
+            LogRescue("OnTrayMessage LBUTTONUP: HiddenState_Remove failed for hwnd=" targetHwnd ": " e.Message)
         ; If stack now empty, destroy group; else update tooltip
         if (group.windows.Length == 0)
             DestroyGroup(foundProcName)
@@ -1088,6 +1296,9 @@ OnWinEvent(hHook, event, hwnd, idObject, idChild, idEventThread, dwmsEventTime) 
             break
         }
     }
+    try HiddenState_Remove(hwnd)
+    catch as e
+        LogRescue("OnWinEvent: HiddenState_Remove failed for hwnd=" hwnd ": " e.Message)
 
     if (group.windows.Length == 0)
         DestroyGroup(procName)
@@ -1099,7 +1310,7 @@ OnWinEvent(hHook, event, hwnd, idObject, idChild, idEventThread, dwmsEventTime) 
 ; OnExit cleanup - restore every hidden window before quitting
 ;==============================================================================
 Cleanup(reason, code) {
-    global Groups, hWinEventHook
+    global Groups, hWinEventHook, cleanupRestoreOnExit
 
     ; Unhook the WinEvent listener first so destroy events during cleanup do not double-fire.
     if (hWinEventHook) {
@@ -1107,13 +1318,712 @@ Cleanup(reason, code) {
         hWinEventHook := 0
     }
 
+    ; Tray icons + in-memory state are always cleaned. The only conditional bit is
+    ; whether we restore the hidden windows (and clear the rescue state file) - that
+    ; depends on the user's choice via ConfirmExitFromMenu (or the safe default true
+    ; for non-user-initiated exits like logoff, shutdown, Velopack update).
     for procName, group in Groups {
-        for hwnd in group.windows {
-            try WinShow("ahk_id " hwnd)
+        if (cleanupRestoreOnExit) {
+            for hwnd in group.windows {
+                try WinShow("ahk_id " hwnd)
+            }
         }
         if (group.hIcon)
             DllCall("DestroyIcon", "Ptr", group.hIcon)
         ShellNotifyDelete(group.trayUid)
     }
     Groups.Clear()
+
+    if (cleanupRestoreOnExit) {
+        ; Every hidden window restored - rescue state should be empty.
+        try HiddenState_Clear()
+    }
+    ; Otherwise: leave hidden.json populated so next launch surfaces them via rescue.
+}
+
+;==============================================================================
+; v1.0.7 rescue mode - persistent hidden-window state + log helper
+;==============================================================================
+
+FormatHiddenAtLocalShort(isoUtcString) {
+    ; Convert "YYYY-MM-DDTHH:mm:ssZ" (UTC) to local-time "HH:mm".
+    ; Storage stays UTC for portability across timezones; display converts on render.
+    ; UTC->local offset comes from the difference between local now and UTC now.
+    if (StrLen(isoUtcString) < 19)
+        return ""
+    ; Strip ISO punctuation to AHK's "YYYYMMDDHH24MISS" stamp format.
+    stampUtc := SubStr(isoUtcString,  1, 4)
+              . SubStr(isoUtcString,  6, 2)
+              . SubStr(isoUtcString,  9, 2)
+              . SubStr(isoUtcString, 12, 2)
+              . SubStr(isoUtcString, 15, 2)
+              . SubStr(isoUtcString, 18, 2)
+    offsetSeconds := DateDiff(A_Now, A_NowUTC, "Seconds")
+    stampLocal := DateAdd(stampUtc, offsetSeconds, "Seconds")
+    return FormatTime(stampLocal, "HH:mm")
+}
+
+LogRescue(message) {
+    ; Append a timestamped line to rescue.log. Best-effort - never throws.
+    ; Strip embedded newlines from message so multi-line content (window titles,
+    ; exception messages) doesn't split a single record into multiple log lines.
+    global RESCUE_LOG_FILE
+    if (RESCUE_LOG_FILE == "")
+        return
+    try {
+        clean := StrReplace(StrReplace(message, "`r", ""), "`n", " ")
+        line  := FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ") " " clean "`n"
+        FileAppend(line, RESCUE_LOG_FILE, "UTF-8")
+    }
+}
+
+JsonEscapeString(s) {
+    ; Escape the named JSON control characters (\\, \", \r, \n, \t, \b, \f).
+    ; Raw codepoints 0x00-0x08 / 0x0B / 0x0E-0x1F are passed through unchanged.
+    ; This is acceptable because our schema is internal (only this app writes
+    ; and reads these files) and window titles / paths effectively never
+    ; contain those raw codepoints. The file remains valid UTF-8 throughout.
+    s := StrReplace(s, "\", "\\")
+    s := StrReplace(s, '"', '\"')
+    s := StrReplace(s, "`r", "\r")
+    s := StrReplace(s, "`n", "\n")
+    s := StrReplace(s, "`t", "\t")
+    s := StrReplace(s, Chr(8),  "\b")
+    s := StrReplace(s, Chr(12), "\f")
+    return s
+}
+
+JsonEncodeHiddenState(windows) {
+    ; Minified output. windows is an Array of objects with hwnd/pid/procName/procPath/title/hiddenAt.
+    parts := []
+    for entry in windows {
+        obj :=  '{"hwnd":'        entry.hwnd
+            .   ',"pid":'         entry.pid
+            .   ',"procName":"'   JsonEscapeString(entry.procName) '"'
+            .   ',"procPath":"'   JsonEscapeString(entry.procPath) '"'
+            .   ',"title":"'      JsonEscapeString(entry.title)    '"'
+            .   ',"hiddenAt":"'   JsonEscapeString(entry.hiddenAt) '"}'
+        parts.Push(obj)
+    }
+    body := ""
+    for i, p in parts {
+        body .= (i > 1 ? "," : "") p
+    }
+    return '{"version":1,"windows":[' body "]}"
+}
+
+JsonUnescapeString(s) {
+    s := StrReplace(s, "\\", Chr(1))         ; placeholder so we don't double-decode
+    s := StrReplace(s, '\"', '"')
+    s := StrReplace(s, "\r", "`r")
+    s := StrReplace(s, "\n", "`n")
+    s := StrReplace(s, "\t", "`t")
+    s := StrReplace(s, "\b", Chr(8))
+    s := StrReplace(s, "\f", Chr(12))
+    s := StrReplace(s, "\/", "/")
+    s := StrReplace(s, Chr(1), "\")           ; restore literal backslash
+    return s
+}
+
+FindJsonBalanced(text, startPos, openChar, closeChar) {
+    ; Walk `text` starting at the openChar at `startPos`, respecting string
+    ; literals ("..." with backslash escapes), until the matching closeChar.
+    ; Used to locate array / object boundaries without being fooled by
+    ; literal `]` or `}` inside string fields (e.g., window titles like
+    ; "[3] Notifications - Chrome" or "[Working] file.ts").
+    ; Returns the 1-based position of the matching closeChar, or 0 if not found.
+    if (SubStr(text, startPos, 1) != openChar)
+        return 0
+    depth     := 1
+    inString  := false
+    escape    := false
+    i         := startPos + 1
+    len       := StrLen(text)
+    while (i <= len) {
+        ch := SubStr(text, i, 1)
+        if (escape) {
+            escape := false
+        } else if (ch == "\") {
+            escape := true
+        } else if (ch == '"') {
+            inString := !inString
+        } else if (!inString) {
+            if (ch == openChar) {
+                depth++
+            } else if (ch == closeChar) {
+                depth--
+                if (depth == 0)
+                    return i
+            }
+        }
+        i++
+    }
+    return 0
+}
+
+JsonDecodeHiddenState(text) {
+    ; Returns Array of entries with .hwnd/.pid (Integer) and .procName/.procPath/.title/.hiddenAt (String).
+    ; Returns [] on any parse failure - we re-write fresh on next operation.
+    out := []
+    if (text == "")
+        return out
+    ; Find the "windows" array
+    pos := InStr(text, '"windows"')
+    if (!pos)
+        return out
+    pos := InStr(text, "[", , pos)
+    if (!pos)
+        return out
+    end := FindJsonBalanced(text, pos, "[", "]")
+    if (!end)
+        return out
+    body := SubStr(text, pos + 1, end - pos - 1)
+
+    ; Iterate object literals { ... }
+    p := 1
+    while (p <= StrLen(body)) {
+        objStart := InStr(body, "{", , p)
+        if (!objStart)
+            break
+        objEnd := FindJsonBalanced(body, objStart, "{", "}")
+        if (!objEnd)
+            break
+        obj := SubStr(body, objStart, objEnd - objStart + 1)
+        entry := ParseHiddenEntry(obj)
+        if (IsObject(entry))
+            out.Push(entry)
+        p := objEnd + 1
+    }
+    return out
+}
+
+ParseHiddenEntry(obj) {
+    ; obj is the text of a single { ... } literal. Extract known fields.
+    entry := { hwnd: 0, pid: 0, procName: "", procPath: "", title: "", hiddenAt: "" }
+    ; Integer fields
+    if RegExMatch(obj, '"hwnd"\s*:\s*(\d+)', &m)
+        entry.hwnd := Integer(m[1])
+    if RegExMatch(obj, '"pid"\s*:\s*(\d+)', &m)
+        entry.pid := Integer(m[1])
+    ; String fields (greedy match up to closing quote, respecting backslash escapes)
+    if RegExMatch(obj, '"procName"\s*:\s*"((?:\\.|[^"\\])*)"', &m)
+        entry.procName := JsonUnescapeString(m[1])
+    if RegExMatch(obj, '"procPath"\s*:\s*"((?:\\.|[^"\\])*)"', &m)
+        entry.procPath := JsonUnescapeString(m[1])
+    if RegExMatch(obj, '"title"\s*:\s*"((?:\\.|[^"\\])*)"', &m)
+        entry.title := JsonUnescapeString(m[1])
+    if RegExMatch(obj, '"hiddenAt"\s*:\s*"((?:\\.|[^"\\])*)"', &m)
+        entry.hiddenAt := JsonUnescapeString(m[1])
+    if (entry.hwnd == 0)
+        return ""    ; required field missing - drop entry
+    return entry
+}
+
+HiddenState_AtomicWrite(jsonText) {
+    ; Write to .tmp then MoveFileExW(MOVEFILE_REPLACE_EXISTING=1). Crash mid-write
+    ; leaves either the old or new file intact, never a partial.
+    global HIDDEN_STATE_FILE, HIDDEN_STATE_TMP
+    if (HIDDEN_STATE_FILE == "")
+        return
+    try {
+        ; Truncate-overwrite the tmp file
+        if FileExist(HIDDEN_STATE_TMP)
+            FileDelete(HIDDEN_STATE_TMP)
+        FileAppend(jsonText, HIDDEN_STATE_TMP, "UTF-8")
+        ok := DllCall("MoveFileExW"
+            , "WStr", HIDDEN_STATE_TMP
+            , "WStr", HIDDEN_STATE_FILE
+            , "UInt", 1                  ; MOVEFILE_REPLACE_EXISTING
+            , "Int")
+        if (!ok)
+            LogRescue("MoveFileExW failed: " A_LastError " (tmp=" HIDDEN_STATE_TMP ", dst=" HIDDEN_STATE_FILE ")")
+    } catch as e {
+        LogRescue("AtomicWrite threw: " e.Message)
+    }
+}
+
+HiddenState_Read() {
+    global HIDDEN_STATE_FILE
+    if (HIDDEN_STATE_FILE == "" || !FileExist(HIDDEN_STATE_FILE))
+        return []
+    try {
+        text := FileRead(HIDDEN_STATE_FILE, "UTF-8")
+        return JsonDecodeHiddenState(text)
+    } catch as e {
+        LogRescue("HiddenState_Read failed: " e.Message)
+        return []
+    }
+}
+
+HiddenState_Clear() {
+    HiddenState_AtomicWrite('{"version":1,"windows":[]}')
+}
+
+HiddenState_Append(hwnd, pid, procName, procPath, title) {
+    entries := HiddenState_Read()
+    ; Defensive: drop any existing entry for this hwnd (shouldn't happen, but cheap to enforce).
+    survivors := []
+    for entry in entries {
+        if (entry.hwnd != hwnd)
+            survivors.Push(entry)
+    }
+    survivors.Push({
+        hwnd: hwnd,
+        pid: pid,
+        procName: procName,
+        procPath: procPath,
+        title: title,
+        hiddenAt: FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ")
+    })
+    HiddenState_AtomicWrite(JsonEncodeHiddenState(survivors))
+}
+
+HiddenState_Remove(hwnd) {
+    entries := HiddenState_Read()
+    survivors := []
+    for entry in entries {
+        if (entry.hwnd != hwnd)
+            survivors.Push(entry)
+    }
+    HiddenState_AtomicWrite(JsonEncodeHiddenState(survivors))
+}
+
+RescueOrphanedWindows() {
+    ; Read tracked entries, validate each against current Windows state, prune stale.
+    ; If any survivors remain, present the modal rescue dialog. Called once during
+    ; Initialize() before tray-icon registration.
+    entries := HiddenState_Read()
+    if (entries.Length == 0)
+        return
+
+    survivors := []
+    for entry in entries {
+        ; Window still exists?
+        if (!DllCall("IsWindow", "Ptr", entry.hwnd, "Int"))
+            continue
+        ; Same process?
+        try {
+            currentPid := WinGetPID("ahk_id " entry.hwnd)
+        } catch {
+            continue
+        }
+        if (currentPid != entry.pid)
+            continue
+        try {
+            currentPath := ProcessGetPath(currentPid)
+        } catch {
+            continue
+        }
+        if (currentPath != entry.procPath)
+            continue
+        ; Still hidden? (User may have restored it externally.)
+        if (DllCall("IsWindowVisible", "Ptr", entry.hwnd, "Int"))
+            continue
+        survivors.Push(entry)
+    }
+
+    ; Always rewrite the file so stale entries are pruned even if we show no dialog.
+    HiddenState_AtomicWrite(JsonEncodeHiddenState(survivors))
+
+    if (survivors.Length == 0)
+        return
+
+    ; Show modal (Task 10 wires this).
+    ShowRescueDialog(survivors)
+}
+
+ShowRescueDialog(survivors) {
+    ; Build a theme-aware modal listing each orphaned window. User picks via
+    ; checkboxes; buttons commit or cancel. Survivors array is the validated
+    ; output of RescueOrphanedWindows.
+    global rescueGui, themeState
+
+    rescueGui := Gui("+Resize +MinSize640x280", "Restore hidden windows")
+    rescueGui.OnEvent("Close", OnRescueCancel)
+    rescueGui.OnEvent("Escape", OnRescueCancel)
+    rescueGui.MarginX := 14
+    rescueGui.MarginY := 14
+    rescueGui.SetFont("s10", "Segoe UI")
+
+    intro := "Found " survivors.Length " window"
+           . (survivors.Length == 1 ? "" : "s")
+           . " hidden by a previous session of minimize-to-tray.`n"
+           . "Restore the checked rows to view; unchecked rows return to the tray."
+    txtIntro := rescueGui.AddText("xm w612", intro)
+    rescueGui.txtIntro := txtIntro
+
+    ; Suppress the native LV header (-Hdr) and use 3 Text controls above the LV as
+    ; column labels. This sidesteps the WM_PAINT-subclass rabbit hole entirely:
+    ; native SysHeader32 doesn't dark-theme via DarkMode_Explorer, and subclassing it
+    ; to override paint triggered re-entrancy bugs on column resize. Static column
+    ; widths are what we use anyway (ModifyCol below).
+    ; Label x-positions are offset 6px from each column's left edge to align with the
+    ; LV's internal column text padding.
+    sepHorizTop := rescueGui.AddText("xm y+8 w612 h1", "")
+
+    rescueGui.SetFont("s10 Bold", "Segoe UI")
+    txtColProcess := rescueGui.AddText("xm+6 y+2 w124",  "Process")
+    txtColTitle   := rescueGui.AddText("x+6 yp w374",    "Window title")
+    txtColTime    := rescueGui.AddText("x+6 yp w74",     "Hidden at")
+    rescueGui.SetFont("s10 Norm", "Segoe UI")
+    rescueGui.colHeaders := [txtColProcess, txtColTitle, txtColTime]
+
+    sepHorizBottom := rescueGui.AddText("xm y+2 w612 h1", "")
+
+    LV := rescueGui.AddListView("xm y+0 w612 r10 -Hdr +Checked +Grid",
+        ["Process", "Window title", "Hidden at"])
+    LV.ModifyCol(1, 130)
+    LV.ModifyCol(2, 380)
+    LV.ModifyCol(3, 80)
+
+    ; Vertical column separators - 5 total to frame the header row + match LV grid:
+    ;   * outer-left, outer-right (match LV's outer border)
+    ;   * 3 column-end dividers (Process|Title, Title|Hidden, Hidden|phantom right gutter)
+    ;
+    ; AHK Gui DIP positioning rounds (lvX_dip + col_dip) * dpiScale to a device pixel.
+    ; The LV instead computes col_end_device = lvX_device + col_device (where col_device
+    ; is the raw LVM_GETCOLUMNWIDTH value). The two rounding paths can disagree by 1
+    ; device pixel, putting our DIP-positioned verticals slightly off the LV grid lines.
+    ;
+    ; Fix: add the verticals at placeholder positions, then SetWindowPos them in raw
+    ; device pixels using the same lvX_device + col_device math the LV uses internally.
+    ; Pixel-perfect alignment regardless of DPI rounding direction.
+    LV.GetPos(&lvX, &lvY, &lvW, &lvH)
+    col1Wdev := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 0, "Ptr", 0, "Int")
+    col2Wdev := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 1, "Ptr", 0, "Int")
+    col3Wdev := DllCall("SendMessageW", "Ptr", LV.Hwnd, "UInt", 0x101D, "Ptr", 2, "Ptr", 0, "Int")
+    dpiScale := A_ScreenDPI / 96
+
+    sepHorizTop.GetPos(&topX, &topY, &topW, &topH)
+    sepHorizBottom.GetPos(&botX, &botY, &botW, &botH)
+    vertY := topY
+    vertH := (botY + botH) - topY
+
+    ; Placeholder positions - replaced by SetWindowPos below.
+    vertOuterL := rescueGui.AddText("xm yp w1 h1", "")
+    vertCol1   := rescueGui.AddText("xm yp w1 h1", "")
+    vertCol2   := rescueGui.AddText("xm yp w1 h1", "")
+    vertCol3   := rescueGui.AddText("xm yp w1 h1", "")
+    vertOuterR := rescueGui.AddText("xm yp w1 h1", "")
+
+    ; Device-pixel coordinates for SetWindowPos.
+    lvXdev   := Round(lvX * dpiScale)
+    lvWdev   := Round(lvW * dpiScale)
+    vertYdev := Round(vertY * dpiScale)
+    vertHdev := Round((vertY + vertH) * dpiScale) - vertYdev
+    SWP      := 0x0014   ; SWP_NOZORDER | SWP_NOACTIVATE
+
+    ; LV has WS_BORDER (1px outer border). Outer verticals sit ON the border at lvXdev
+    ; and lvXdev+lvWdev-1. Inner verticals must use the LV's CLIENT origin which is
+    ; 1px inside the outer left border - hence the +1 below.
+    lvInnerX := lvXdev + 1
+
+    DllCall("SetWindowPos", "Ptr", vertOuterL.Hwnd, "Ptr", 0,
+        "Int", lvXdev,                                          "Int", vertYdev,
+        "Int", 1, "Int", vertHdev, "UInt", SWP)
+    DllCall("SetWindowPos", "Ptr", vertCol1.Hwnd,   "Ptr", 0,
+        "Int", lvInnerX + col1Wdev,                              "Int", vertYdev,
+        "Int", 1, "Int", vertHdev, "UInt", SWP)
+    DllCall("SetWindowPos", "Ptr", vertCol2.Hwnd,   "Ptr", 0,
+        "Int", lvInnerX + col1Wdev + col2Wdev,                   "Int", vertYdev,
+        "Int", 1, "Int", vertHdev, "UInt", SWP)
+    DllCall("SetWindowPos", "Ptr", vertCol3.Hwnd,   "Ptr", 0,
+        "Int", lvInnerX + col1Wdev + col2Wdev + col3Wdev,        "Int", vertYdev,
+        "Int", 1, "Int", vertHdev, "UInt", SWP)
+    DllCall("SetWindowPos", "Ptr", vertOuterR.Hwnd, "Ptr", 0,
+        "Int", lvXdev + lvWdev - 1,                              "Int", vertYdev,
+        "Int", 1, "Int", vertHdev, "UInt", SWP)
+
+    rescueGui.colSeparators := [sepHorizTop, sepHorizBottom,
+                                 vertOuterL, vertCol1, vertCol2, vertCol3, vertOuterR]
+
+    ; Stash survivor entries on the LV via a parallel array (LV row index -> entry).
+    rescueGui.entries := survivors
+    for entry in survivors {
+        timeShort := FormatHiddenAtLocalShort(entry.hiddenAt)
+        LV.Add("Check", entry.procName, entry.title, timeShort)
+    }
+    rescueGui.lv := LV
+
+    btnRestoreSelected := rescueGui.AddButton("xm w180 h32", "&Restore Selected")
+    btnRestoreSelected.OnEvent("Click", OnRescueRestoreSelected)
+    btnRestoreAll := rescueGui.AddButton("x+10 yp w160 h32 Default", "Restore &All")
+    btnRestoreAll.OnEvent("Click", OnRescueRestoreAll)
+    btnCancel := rescueGui.AddButton("x+10 yp w160 h32", "Send All to &Tray")
+    btnCancel.OnEvent("Click", OnRescueCancel)
+
+    rescueGui.btnRestoreSelected := btnRestoreSelected
+    rescueGui.btnRestoreAll      := btnRestoreAll
+    rescueGui.btnCancel          := btnCancel
+
+    ApplyThemeToRescue()
+
+    rescueGui.Show("AutoSize Center")
+}
+
+ApplyThemeToRescue() {
+    global rescueGui, themeState
+    if (!IsObject(rescueGui))
+        return
+    pal := GetThemePalette(themeState)
+    try rescueGui.BackColor := pal.bg
+
+    ; Intro Text color follows pal.text - parent BackColor alone isn't enough because the
+    ; Text control retains its initially-set text color (which was the light-theme default).
+    if (IsObject(rescueGui.txtIntro)) {
+        try rescueGui.txtIntro.Opt("c" pal.text)
+        try rescueGui.txtIntro.Redraw()
+    }
+
+    ; Column header labels (Text controls above the LV - native header suppressed via -Hdr).
+    if (rescueGui.HasProp("colHeaders") && IsObject(rescueGui.colHeaders)) {
+        for ctrl in rescueGui.colHeaders {
+            try ctrl.Opt("c" pal.headerFg)
+            try ctrl.Redraw()
+        }
+    }
+
+    ; Grid separators (vertical column dividers + horizontal under-header line).
+    ; Uses pal.gridLine (separate from buttonBorder) tuned to match the LV body's
+    ; auto-drawn grid color in each theme.
+    if (rescueGui.HasProp("colSeparators") && IsObject(rescueGui.colSeparators)) {
+        for sep in rescueGui.colSeparators {
+            try sep.Opt("Background" pal.gridLine)
+            try sep.Redraw()
+        }
+    }
+
+    ; ListView body color via AHK Gui options.
+    if (IsObject(rescueGui.lv)) {
+        try rescueGui.lv.Opt("Background" pal.bg " c" pal.title)
+        try rescueGui.lv.Redraw()
+    }
+
+    ; DWM dark title bar (Win10 19041+ / all Win11)
+    val := (themeState = "dark") ? 1 : 0
+    try DllCall("dwmapi\DwmSetWindowAttribute"
+        , "Ptr",  rescueGui.Hwnd
+        , "UInt", 20             ; DWMWA_USE_IMMERSIVE_DARK_MODE
+        , "Int*", val
+        , "UInt", 4)
+
+    ; uxtheme dark-mode private API: theme every child control (buttons, listview)
+    ; with DarkMode_Explorer in dark, Explorer in light. This is the modern Win11 path.
+    ApplyDarkModeToGui(rescueGui, themeState)
+}
+
+OnRescueRestoreSelected(*) {
+    global rescueGui
+    if (!IsObject(rescueGui))
+        return
+    LV := rescueGui.lv
+    entries := rescueGui.entries
+
+    ; Build a set of checked row indices for fast lookup
+    checkedRows := Map()
+    rowIdx := 0
+    while (rowIdx := LV.GetNext(rowIdx, "C"))
+        checkedRows[rowIdx] := true
+
+    ; Iterate every row; checked => WinShow + Remove from file, unchecked => StashAlreadyHidden
+    Loop entries.Length {
+        idx := A_Index
+        entry := entries[idx]
+        if (checkedRows.Has(idx)) {
+            ; Checked: restore to view
+            try WinShow("ahk_id " entry.hwnd)
+            catch as e
+                LogRescue("Rescue restore-selected WinShow failed for hwnd=" entry.hwnd ": " e.Message)
+            try HiddenState_Remove(entry.hwnd)
+            catch as e
+                LogRescue("Rescue restore-selected HiddenState_Remove failed for hwnd=" entry.hwnd ": " e.Message)
+        } else {
+            ; Unchecked: return to the tray. Entry stays in hidden.json (mirrors in-memory Groups).
+            StashAlreadyHidden(entry.hwnd, entry.pid, entry.procName, entry.procPath)
+        }
+    }
+
+    CloseRescue()
+}
+
+OnRescueRestoreAll(*) {
+    global rescueGui
+    if (!IsObject(rescueGui))
+        return
+    entries := rescueGui.entries
+    for entry in entries {
+        try WinShow("ahk_id " entry.hwnd)
+        catch as e
+            LogRescue("Rescue restore-all failed for hwnd=" entry.hwnd ": " e.Message)
+    }
+    HiddenState_Clear()
+    CloseRescue()
+}
+
+OnRescueCancel(*) {
+    ; "Send All to Tray" semantics: every entry re-registers into the running tray.
+    ; hidden.json is left alone - the entries already represent in-memory Groups state
+    ; after this call. Also called for Esc / Close X.
+    global rescueGui
+    if (IsObject(rescueGui)) {
+        for entry in rescueGui.entries {
+            StashAlreadyHidden(entry.hwnd, entry.pid, entry.procName, entry.procPath)
+        }
+    }
+    CloseRescue()
+}
+
+CloseRescue() {
+    global rescueGui
+    if (IsObject(rescueGui)) {
+        try rescueGui.Destroy()
+    }
+    rescueGui := 0
+}
+
+;==============================================================================
+; v1.0.7 dark-mode private uxtheme APIs - theme-aware native controls
+;
+; Replaces what was originally drafted as GDI BS_OWNERDRAW + WM_DRAWITEM owner-draw
+; (15+ years dated; AHK silently dropped +0xB on AddButton; the path was a dead-end).
+;
+; Modern Win11 path: SetPreferredAppMode + AllowDarkModeForWindow + SetWindowTheme.
+; This is the same engine File Explorer / Settings / Notepad++ / ShareX use to dark-
+; theme native controls (buttons, ListView, checkbox, scrollbars). No painting; the
+; OS handles the rendering, hover/pressed states, focus ring, and accessibility tree
+; integration. Private uxtheme ordinals are technically undocumented but have been
+; stable since Win10 1809 (Oct 2018); Windows itself relies on them.
+;
+; Ordinals reference (uxtheme.dll):
+;   #132 ShouldAppsUseDarkMode (returns BOOL)
+;   #133 AllowDarkModeForWindow(hwnd, allow)
+;   #135 SetPreferredAppMode(mode)   ; 1=AllowDark, 2=ForceDark, 3=ForceLight, 4=Max
+;   #138 ShouldSystemUseDarkMode (returns BOOL)
+;==============================================================================
+
+ApplyAppDarkMode(themeStateLocal) {
+    ; Process-level mode. Affects controls created AFTER this call. Call once at
+    ; startup and again on every theme toggle.
+    mode := (themeStateLocal = "dark") ? 2 : 3   ; 2=ForceDark, 3=ForceLight
+    try DllCall("uxtheme\#135", "Int", mode, "CDecl Int")
+}
+
+ApplyDarkModeToGui(guiObj, themeStateLocal) {
+    ; Window-level + per-control theme application. Used for live theme toggling on
+    ; already-created Gui windows. Calls AllowDarkModeForWindow on the top-level, then
+    ; SetWindowTheme("DarkMode_Explorer" or "Explorer") on each child control. Wrapped
+    ; in try blocks because uxtheme ordinals can fail silently on unsupported Win10
+    ; builds without taking down the rest of the theme apply.
+    if (!IsObject(guiObj))
+        return
+
+    allow := (themeStateLocal = "dark") ? 1 : 0
+    try DllCall("uxtheme\#133", "Ptr", guiObj.Hwnd, "Int", allow, "CDecl Int")
+
+    themeClass := (themeStateLocal = "dark") ? "DarkMode_Explorer" : "Explorer"
+    for hwndKey, ctrl in guiObj {
+        if (!IsObject(ctrl))
+            continue
+        try DllCall("uxtheme\SetWindowTheme"
+            , "Ptr",  ctrl.Hwnd
+            , "WStr", themeClass
+            , "Ptr",  0)
+        try DllCall("InvalidateRect", "Ptr", ctrl.Hwnd, "Ptr", 0, "Int", true)
+    }
+
+    ; Force an immediate non-client area repaint so the title-bar dark mode and child
+    ; control re-theming take effect without waiting for the next user interaction.
+    try DllCall("InvalidateRect", "Ptr", guiObj.Hwnd, "Ptr", 0, "Int", true)
+}
+
+;==============================================================================
+; v1.0.7 exit flow - confirmation dialog when tray-managed windows exist
+;==============================================================================
+
+ConfirmExitFromMenu(*) {
+    global Groups, exitGui, themeState
+
+    ; Count managed windows across all groups.
+    totalWindows := 0
+    for procName, group in Groups
+        totalWindows += group.windows.Length
+
+    ; If no windows in tray, exit immediately. No dialog needed.
+    if (totalWindows == 0) {
+        ExitApp()
+        return
+    }
+
+    ; If a dialog is already open (double-click race), focus it instead of duplicating.
+    if (IsObject(exitGui)) {
+        try exitGui.Show()
+        return
+    }
+
+    exitGui := Gui("+AlwaysOnTop +MinSize460x180", "Exit minimize-to-tray")
+    exitGui.OnEvent("Close",  (*) => CloseExitDialog())
+    exitGui.OnEvent("Escape", (*) => CloseExitDialog())
+    exitGui.MarginX := 18
+    exitGui.MarginY := 16
+    exitGui.SetFont("s10", "Segoe UI")
+
+    countText := "You have " totalWindows " app window" (totalWindows == 1 ? "" : "s") " hidden in the tray."
+    txtCount := exitGui.AddText("xm w432", countText)
+    bodyText := "Restore all before exiting or leave hidden? Hidden apps can't be recovered after log off or restart."
+    txtBody := exitGui.AddText("xm w432", bodyText)
+
+    btnRestore := exitGui.AddButton("xm w130 h32 Default", "&Restore && Exit")
+    btnRestore.OnEvent("Click", (*) => DoExitWithChoice(true))
+    btnLeave := exitGui.AddButton("x+10 yp w130 h32", "&Leave Hidden")
+    btnLeave.OnEvent("Click", (*) => DoExitWithChoice(false))
+    btnCancel := exitGui.AddButton("x+10 yp w130 h32", "&Cancel")
+    btnCancel.OnEvent("Click", (*) => CloseExitDialog())
+
+    exitGui.txtCount   := txtCount
+    exitGui.txtBody    := txtBody
+    exitGui.btnRestore := btnRestore
+    exitGui.btnLeave   := btnLeave
+    exitGui.btnCancel  := btnCancel
+
+    ApplyThemeToExitDialog()
+
+    exitGui.Show("AutoSize Center")
+}
+
+ApplyThemeToExitDialog() {
+    global exitGui, themeState
+    if (!IsObject(exitGui))
+        return
+    pal := GetThemePalette(themeState)
+    try exitGui.BackColor := pal.bg
+    if (IsObject(exitGui.txtCount))
+        try exitGui.txtCount.Opt("c" pal.text)
+    if (IsObject(exitGui.txtBody))
+        try exitGui.txtBody.Opt("c" pal.text)
+
+    ; DWM dark title bar
+    val := (themeState = "dark") ? 1 : 0
+    try DllCall("dwmapi\DwmSetWindowAttribute"
+        , "Ptr",  exitGui.Hwnd
+        , "UInt", 20
+        , "Int*", val
+        , "UInt", 4)
+
+    ; uxtheme dark-mode private API: theme every child control with DarkMode_Explorer
+    ApplyDarkModeToGui(exitGui, themeState)
+}
+
+DoExitWithChoice(restoreFirst) {
+    global cleanupRestoreOnExit, exitGui
+    cleanupRestoreOnExit := restoreFirst
+    CloseExitDialog()
+    ExitApp()
+}
+
+CloseExitDialog() {
+    global exitGui
+    if (IsObject(exitGui)) {
+        try exitGui.Destroy()
+    }
+    exitGui := 0
 }
