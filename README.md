@@ -76,7 +76,7 @@ The About dialog contains:
 
 ### Middle-click on title bars: pass-through in apps that consume the click
 
-Modern apps with custom-drawn title bars (Chrome, Edge, Firefox, File Explorer, Office, VS Code, and others with tab strips) only report their actual drag-handle region as a "title bar" to Windows. If you middle-click on something *inside* their UI — a Chrome/Edge/Firefox tab, an Explorer tab, an Office ribbon — those apps consume the click for their own behavior (typically closing the tab) before our predicate sees it. Middle-clicking on the **empty drag region** at the top of those windows still works for minimizing.
+Modern apps with custom-drawn title bars (Chrome, Edge, Firefox, File Explorer, Office, VS Code, and others with tab strips) only report their actual drag-handle region as a "title bar" to Windows. If you middle-click on something *inside* their UI — a Chrome/Edge/Firefox tab, an Explorer tab, an Office ribbon — those apps consume the click for their own behavior (typically closing the tab) before our predicate sees it. Middle-clicking on the **empty drag region** at the top of those windows still works for minimizing most of them (but not all).
 
 `Win+Shift+Z` is the universal fallback: it works in every app, every time, regardless of how that app handles middle-click.
 
