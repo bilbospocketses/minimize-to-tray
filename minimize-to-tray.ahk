@@ -1853,9 +1853,9 @@ ConfirmExitFromMenu(*) {
     exitGui.MarginY := 16
     exitGui.SetFont("s10", "Segoe UI")
 
-    countText := "You have " totalWindows " window" (totalWindows == 1 ? "" : "s") " hidden in the tray."
-    exitGui.AddText("xm w432", countText)
-    bodyText := "Restore them all before exiting, or leave them hidden so you can recover them on next launch? Apps cannot be recovered if you log off or restart the computer before the next app launch."
+    countText := "You have " totalWindows " app window" (totalWindows == 1 ? "" : "s") " hidden in the tray."
+    txtCount := exitGui.AddText("xm w432", countText)
+    bodyText := "Restore all before exiting or leave hidden? Hidden apps can't be recovered after log off or restart."
     txtBody := exitGui.AddText("xm w432", bodyText)
 
     btnRestore := exitGui.AddButton("xm w130 h32 Default", "&Restore && Exit")
@@ -1865,7 +1865,8 @@ ConfirmExitFromMenu(*) {
     btnCancel := exitGui.AddButton("x+10 yp w130 h32", "&Cancel")
     btnCancel.OnEvent("Click", (*) => CloseExitDialog())
 
-    exitGui.txtBody := txtBody
+    exitGui.txtCount   := txtCount
+    exitGui.txtBody    := txtBody
     exitGui.btnRestore := btnRestore
     exitGui.btnLeave   := btnLeave
     exitGui.btnCancel  := btnCancel
@@ -1881,6 +1882,8 @@ ApplyThemeToExitDialog() {
         return
     pal := GetThemePalette(themeState)
     try exitGui.BackColor := pal.bg
+    if (IsObject(exitGui.txtCount))
+        try exitGui.txtCount.Opt("c" pal.text)
     if (IsObject(exitGui.txtBody))
         try exitGui.txtBody.Opt("c" pal.text)
 
