@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-05-24
+
+### Added
+- **Rescue mode.** Hidden windows are now tracked at `%LOCALAPPDATA%\bilbospocketses\minimize-to-tray\hidden.json` so a crash / force-kill / unclean exit no longer orphans windows. On next launch, if validated survivors exist (window still alive + PID + path match), a modal dialog appears with checkboxes per row: **Restore Selected** sends checked rows back to view and the rest back to the tray; **Restore All** brings everything back; **Send All to Tray** re-registers everything as tray-managed without re-hiding (entries already represent in-memory state after the call). Esc / Close-X behave like Send All to Tray. Atomic write via temp-file + `MoveFileEx` keeps the state file consistent under all exit paths.
+- **Exit confirmation dialog.** Right-click the always-visible tray icon → Exit now asks "Restore & Exit" / "Leave Hidden" / "Cancel" if any windows are currently tray-managed. **Leave Hidden** is the use-case for crash recovery: windows stay hidden across the exit and next launch's rescue dialog will surface them. Zero-window fast-path skips the dialog entirely. Non-user-initiated exits (logoff, shutdown, Velopack update) keep the safe default: restore everything.
+- **`Shift+Esc` diagnostic hotkey.** Snapshots the active window's Win32 + DWM state (HWND, class, title, process, path, rect, GWL_STYLE, GWL_EXSTYLE, GA_ROOTOWNER, DWMWA_CLOAKED, DWMWA_SYSTEMBACKDROP_TYPE) to the clipboard. Designed to characterize windows where `WinHide` is silently ignored (Electron / Chromium with Win11 system backdrops) so a future release can target the fix.
+
+### Changed
+- **Native Win11 dark/light theming for child controls.** Buttons, ListView, and checkboxes in the rescue / exit / About dialogs are now themed via uxtheme's `SetPreferredAppMode` + `AllowDarkModeForWindow` + `SetWindowTheme("DarkMode_Explorer"|"Explorer")` — the same engine File Explorer / Settings / Notepad++ use. Real hover / pressed states, real focus rings, real default-button accent borders, no hand-painted approximations. Replaces what was originally drafted as `BS_OWNERDRAW` + `WM_DRAWITEM` GDI owner-draw (~15 years dated, and AHK silently drops the `+0xB` option on `AddButton`).
+- **Rescue dialog header.** Native LV header is suppressed (`-Hdr`); three bold Text labels above the ListView serve as column headers, framed with a 7-line grid (5 vertical separators positioned via `LVM_GETCOLUMNWIDTH` + device-pixel `SetWindowPos` for pixel-perfect alignment with the LV body grid at any DPI scale; 2 horizontal dividers). `gridLine` palette entry tuned to match the LV body's auto-drawn grid color in both themes.
+- **"Hidden at" column shows local time.** Storage stays ISO 8601 UTC for portability; display converts to local "HH:mm" via `A_Now - A_NowUTC` offset.
+- **Exit dialog body shortened.** "Restore all before exiting or leave hidden? Hidden apps can't be recovered after log off or restart." Replaces a longer paragraph.
+
 ## [1.0.6] - 2026-05-23
 
 ### Added
