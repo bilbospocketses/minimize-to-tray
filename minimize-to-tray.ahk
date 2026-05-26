@@ -484,7 +484,7 @@ RelaunchNonElevated() {
     global cleanupRestoreOnExit
     cleanupRestoreOnExit := false
     try {
-        Run('runas /trustlevel:0x20000 "' A_ScriptFullPath '"',, "Hide")
+        Run('explorer.exe "' A_ScriptFullPath '"')
         ExitApp
     } catch {
         cleanupRestoreOnExit := true
