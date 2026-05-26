@@ -31,7 +31,7 @@ The AutoHotkey runtime is bundled into the executable either way — there's not
 
 When a newer version is published to the [Releases page](https://github.com/bilbospocketses/minimize-to-tray/releases), the app's About dialog shows a pulsing blue dot to the left of the theme toggle in the top-right corner. Click the dot to download and apply the update in place — the app restarts on the new version automatically.
 
-The update check fires twice: ~5 seconds after each launch, and whenever you open the About dialog. If a check happens to find an update while About is currently open, the dot pops in live — no need to close and reopen.
+The update check fires twice: ~5 seconds after each launch, and whenever you open the About dialog. While the check runs you may see a brief hourglass cursor. If a check happens to find an update while About is currently open, the dot pops in live — no need to close and reopen.
 
 ## Usage
 
