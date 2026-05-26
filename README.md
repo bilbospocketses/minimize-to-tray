@@ -49,7 +49,7 @@ The app's own always-visible tray icon (separate from the per-app ones) has its 
 
 - **Hover** → tooltip showing the triggers.
 - **Single left-click** → opens **About**.
-- **Right-click** → menu with **About** / **Run on login** (toggle, checkmark reflects current state) / **Exit**.
+- **Right-click** → menu with **About** / **Run on login** / **Run as Administrator** (toggles, checkmarks reflect current state) / **Exit**.
 
 When you pick **Exit** with windows still in the tray, the app asks whether to **Restore & Exit** (default — bring everything back to the desktop and close), **Leave Hidden** (close the app but keep windows hidden — they'll resurface on the next launch via the rescue dialog), or **Cancel**. With no windows in the tray, Exit closes the app immediately.
 
@@ -67,7 +67,8 @@ The About dialog contains:
 
 - App icon + name + version.
 - Trigger reminder.
-- **Run on login** checkbox (mirrors the tray menu's toggle).
+- **Run on login** checkbox (mirrors the tray menu's toggle). Managed via a Windows Scheduled Task (not the registry Run key).
+- **Run as Administrator** checkbox (mirrors the tray menu's toggle). When enabled, the app relaunches elevated and future logins start elevated automatically. See [Troubleshooting](#minimizing-fails-on-certain-windows-elevation-mismatch) for when you'd want this.
 - Clickable GitHub URL.
 - **Light / Dark theme toggle** (☀ / 🌙 glyph) in the top-right corner. Click to flip — dialog body and OS title bar re-style live without reopen. Fresh installs default to your current Windows Apps theme.
 - Pulsing blue update dot to the left of the theme toggle when a newer version is available.
@@ -93,6 +94,12 @@ Per-app tray icons may hide in the overflow flyout. Functionality is identical, 
 Releases are unsigned today. SmartScreen surfaces a warning on first run — click "More info" → "Run anyway". Code signing is a planned follow-up.
 
 ## Troubleshooting
+
+### Minimizing fails on certain windows (elevation mismatch)
+
+If `Win+Shift+Z` or middle-click consistently fails to minimize certain windows, those apps may be running elevated (as Administrator). Windows prevents a non-elevated process from interacting with elevated windows.
+
+**Fix:** enable **Run as Administrator** in the About dialog or tray right-click menu. The app will relaunch with a UAC prompt and persist the preference for future logins.
 
 ### A window stays visible after `Win+Shift+Z` or middle-click
 
