@@ -68,7 +68,7 @@ The About dialog contains:
 - App icon + name + version.
 - Trigger reminder.
 - **Run on login** checkbox (mirrors the tray menu's toggle). Managed via a Windows Scheduled Task (not the registry Run key).
-- **Run as Administrator** checkbox (mirrors the tray menu's toggle). When enabled, the app relaunches elevated and future logins start elevated automatically. See [Troubleshooting](#minimizing-fails-on-certain-windows-elevation-mismatch) for when you'd want this.
+- **Run as Administrator** checkbox (mirrors the tray menu's toggle). When enabled, the app relaunches elevated and future logins start elevated automatically. When disabled, the app relaunches without elevation. Changes made via the checkboxes are applied when the dialog closes. See [Troubleshooting](#minimizing-fails-on-certain-windows-elevation-mismatch) for when you'd want this.
 - Clickable GitHub URL.
 - **Light / Dark theme toggle** (☀ / 🌙 glyph) in the top-right corner. Click to flip — dialog body and OS title bar re-style live without reopen. Fresh installs default to your current Windows Apps theme.
 - Pulsing blue update dot to the left of the theme toggle when a newer version is available.
@@ -105,11 +105,14 @@ If `Win+Shift+Z` or middle-click consistently fails to minimize certain windows,
 
 Some app + Windows + display-config combinations have intermittently shown the tray icon being created (`WinHide` returning success) but the window staying visibly painted on the desktop. The pattern has been hard to characterize because it's intermittent — the same app that exhibits the bug one day works correctly the next.
 
-If you can reproduce this, please help us diagnose. While the misbehaving window is **focused**:
+**Before filing an issue**, try enabling **Run as Administrator** in the About dialog or tray right-click menu. If the misbehaving app is running elevated, minimize-to-tray needs to match — this is the most common cause of consistent failures against specific apps.
+
+If the issue persists with Run as Administrator enabled, please help us diagnose. While the misbehaving window is **focused**:
 
 1. Press **`Shift+Esc`** — the app silently captures the active window's Win32 + DWM state to your clipboard.
 2. Open a [new issue](https://github.com/bilbospocketses/minimize-to-tray/issues/new) and paste the clipboard contents into the issue body.
 3. Describe what you saw — which trigger (`Win+Shift+Z` or middle-click), what was visible before / after, whether the tray icon appeared, whether `Win+Shift+Z` (the universal fallback) eventually worked, and anything you'd done with the window just before (resized / maximized / moved between monitors).
+4. Note whether **Run as Administrator** was enabled when the issue occurred.
 
 The dump contains window class, title, process name + path, position, Win32 styles, and DWM cloak / system-backdrop state. No personal data beyond the window title (which often contains a file path or document name — feel free to redact before pasting).
 
