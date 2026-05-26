@@ -269,10 +269,17 @@ Initialize() {
     runOnLoginState := ReadRunOnLoginState()
     UpdateRunOnLoginUI()
 
-    ; Seed Run-as-Administrator state from the registry and sync UI
+    ; Seed Run-as-Administrator state from the registry and sync UI.
+    ; If the preference is set but we're not elevated, relaunch with UAC.
     global runAsAdminState
     runAsAdminState := ReadRegistryRunAsAdmin()
     UpdateRunAsAdminUI()
+    if (runAsAdminState && !A_IsAdmin && A_IsCompiled) {
+        try {
+            Run('*RunAs "' A_ScriptFullPath '"')
+            ExitApp
+        }
+    }
 
     ; Seed theme state. Compiled installs are seeded by --veloapp-install; existing
     ; pre-v1.0.3 users get a one-time seed from the Windows Apps theme on first run.
