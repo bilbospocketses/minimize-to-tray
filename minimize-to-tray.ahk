@@ -245,6 +245,13 @@ Initialize() {
     A_TrayMenu.Default := "&About"
     A_TrayMenu.ClickCount := 1   ; single left-click on the app tray icon opens About (default item)
 
+    ; Clean up one-shot relaunch task left by a prior de-elevation restart.
+    try {
+        svc := ComObject("Schedule.Service")
+        svc.Connect()
+        svc.GetFolder("\").DeleteTask("minimize-to-tray-relaunch", 0)
+    }
+
     ; v1.0.8: migrate Run-on-login from HKCU\...\Run registry key to scheduled task.
     ; If the old registry value exists, create an equivalent task and delete the key.
     global runOnLoginState, RUN_REG_KEY, RUN_REG_VALUE
@@ -393,9 +400,6 @@ ToggleRunOnLoginFromMenu(*) {
     SetRunOnLogin(!IsRunOnLoginEnabled())
 }
 
-OnAboutRunOnLoginToggle(ctrl, *) {
-    SetRunOnLogin(ctrl.Value)
-}
 
 ;==============================================================================
 ; Run as Administrator (registry preference + scheduled task RunLevel)
@@ -449,25 +453,48 @@ ToggleRunAsAdminFromMenu(*) {
     HandleRunAsAdminToggle(!IsRunAsAdminEnabled())
 }
 
-OnAboutRunAsAdminToggle(ctrl, *) {
-    HandleRunAsAdminToggle(ctrl.Value)
-}
-
 HandleRunAsAdminToggle(newValue) {
     SetRunAsAdmin(newValue)
-    if (newValue && !A_IsAdmin) {
-        global cleanupRestoreOnExit
-        cleanupRestoreOnExit := false
-        try {
-            Run('*RunAs "' A_ScriptFullPath '"')
-            ExitApp
-        } catch {
-            cleanupRestoreOnExit := true
-            SetRunAsAdmin(0)
-        }
-    } else if (!newValue && A_IsAdmin) {
-        MsgBox("The app will launch without administrator privileges on next login.`n`nTo remove elevation now, exit and restart the app.",
-               "minimize-to-tray", "OK Iconi")
+    if (newValue && !A_IsAdmin)
+        RelaunchElevated()
+    else if (!newValue && A_IsAdmin)
+        RelaunchNonElevated()
+}
+
+RelaunchElevated() {
+    global cleanupRestoreOnExit
+    cleanupRestoreOnExit := false
+    try {
+        Run('*RunAs "' A_ScriptFullPath '"')
+        ExitApp
+    } catch {
+        cleanupRestoreOnExit := true
+        SetRunAsAdmin(0)
+    }
+}
+
+RelaunchNonElevated() {
+    global cleanupRestoreOnExit
+    cleanupRestoreOnExit := false
+    try {
+        svc := ComObject("Schedule.Service")
+        svc.Connect()
+        root := svc.GetFolder("\")
+        td := svc.NewTask(0)
+        td.Principal.LogonType := 3
+        td.Principal.RunLevel := 0       ; TASK_RUNLEVEL_LUA — non-elevated
+        td.Triggers.Create(7)            ; TASK_TRIGGER_REGISTRATION — fires immediately
+        action := td.Actions.Create(0)
+        action.Path := A_ScriptFullPath
+        s := td.Settings
+        s.DisallowStartIfOnBatteries := false
+        s.StopIfGoingOnBatteries := false
+        s.ExecutionTimeLimit := "PT0S"
+        root.RegisterTaskDefinition("minimize-to-tray-relaunch", td, 6, "", "", 3)
+        ExitApp
+    } catch {
+        cleanupRestoreOnExit := true
+        SetRunAsAdmin(1)
     }
 }
 
@@ -770,14 +797,12 @@ ShowAbout(*) {
 
     aboutRunOnLoginCb := aboutGui.Add("Checkbox", "x28 y+20", "Run on login")
     aboutRunOnLoginCb.Value := IsRunOnLoginEnabled()
-    aboutRunOnLoginCb.OnEvent("Click", OnAboutRunOnLoginToggle)
     aboutRunOnLoginCb.GetPos(, &cbY, &cbW, )
     aboutRunOnLoginCb.Move(28 + (contentW - cbW) // 2, cbY)
     aboutControlRefs["checkbox"] := aboutRunOnLoginCb
 
     aboutRunAsAdminCb := aboutGui.Add("Checkbox", "x28 y+8", "Run as Administrator")
     aboutRunAsAdminCb.Value := IsRunAsAdminEnabled()
-    aboutRunAsAdminCb.OnEvent("Click", OnAboutRunAsAdminToggle)
     aboutRunAsAdminCb.GetPos(, &cbY2, &cbW2, )
     aboutRunAsAdminCb.Move(28 + (contentW - cbW2) // 2, cbY2)
     aboutControlRefs["checkbox2"] := aboutRunAsAdminCb
@@ -793,11 +818,11 @@ ShowAbout(*) {
     okX := 28 + (contentW - 96) // 2
     aboutGui.SetFont("s9 Norm c000000", "Segoe UI")
     okBtn := aboutGui.Add("Button", Format("x{1} y+12 w96 h28 Default", okX), "OK")
-    okBtn.OnEvent("Click", (*) => CloseAbout())
+    okBtn.OnEvent("Click", (*) => ApplyAboutAndClose())
     aboutControlRefs["okButton"] := okBtn
 
-    aboutGui.OnEvent("Close",  (*) => CloseAbout())
-    aboutGui.OnEvent("Escape", (*) => CloseAbout())
+    aboutGui.OnEvent("Close",  (*) => ApplyAboutAndClose())
+    aboutGui.OnEvent("Escape", (*) => ApplyAboutAndClose())
 
     ; Initial theme paint - applies background + per-control colors before show.
     ApplyThemeToAbout()
@@ -811,6 +836,25 @@ ShowAbout(*) {
     ; appear on the NEXT About open. Live-injecting the dot into a currently-
     ; open dialog is deliberately out of scope for v1.0.4.
     SetTimer(CheckForUpdateAsync, -1)
+}
+
+ApplyAboutAndClose() {
+    global aboutRunOnLoginCb, aboutRunAsAdminCb
+    pendingLogin := (aboutRunOnLoginCb && IsObject(aboutRunOnLoginCb)) ? aboutRunOnLoginCb.Value : IsRunOnLoginEnabled()
+    pendingAdmin := (aboutRunAsAdminCb && IsObject(aboutRunAsAdminCb)) ? aboutRunAsAdminCb.Value : IsRunAsAdminEnabled()
+    CloseAbout()
+    loginChanged := (pendingLogin != IsRunOnLoginEnabled())
+    adminChanged := (pendingAdmin != IsRunAsAdminEnabled())
+    if (loginChanged)
+        SetRunOnLogin(pendingLogin)
+    if (adminChanged)
+        SetRunAsAdmin(pendingAdmin)
+    if (adminChanged) {
+        if (pendingAdmin && !A_IsAdmin)
+            RelaunchElevated()
+        else if (!pendingAdmin && A_IsAdmin)
+            RelaunchNonElevated()
+    }
 }
 
 CloseAbout() {
