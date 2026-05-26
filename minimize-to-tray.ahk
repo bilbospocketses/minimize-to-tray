@@ -55,7 +55,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.7"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.8"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
@@ -71,6 +71,19 @@ global RUN_REG_VALUE     := "minimize-to-tray"
 global RUN_MENU_LABEL    := "&Run on login"
 global runOnLoginState   := 0           ; in-process truth; seeded from registry at init
 global aboutRunOnLoginCb := 0           ; About-dialog checkbox handle (or 0 when dialog closed)
+
+; Run-as-Administrator state. Independent of Run-on-login; persisted in the app
+; registry key so the elevation preference survives across sessions even when the
+; scheduled task doesn't exist (Run on login unchecked).
+global APP_RUNAS_REG_VALUE := "RunAsAdmin"
+global ADMIN_MENU_LABEL    := "Run as &Administrator"
+global runAsAdminState     := 0           ; in-process truth; seeded from registry at init
+global aboutRunAsAdminCb   := 0           ; About-dialog checkbox handle (or 0 when dialog closed)
+
+; Scheduled task name used for Run-on-login (replaces the HKCU\...\Run registry
+; key as of v1.0.8). The task is created/updated/deleted via the COM Task Scheduler
+; 2.0 API — no external binary.
+global SCHED_TASK_NAME := "minimize-to-tray"
 
 ; Light/Dark theme state. Same source-of-truth pattern as Run-on-login: in-process
 ; global seeded from registry at init, mirrored to registry on toggle when compiled.
@@ -126,22 +139,20 @@ MButton::MinimizeUnderCursor()
 ; The .NET SDK's VelopackApp.Build().Run() handles these automatically, but our
 ; main exe is native AHK-compiled. We have to do it ourselves: detect any
 ; --veloapp-* arg and exit cleanly so Velopack's installer doesn't report a
-; timeout. On uninstall, also wipe the Run-on-login registry entry so Windows
-; doesn't keep trying to launch a no-longer-installed exe at login.
+; timeout. On uninstall, remove the scheduled task and wipe app-scoped registry.
 for arg in A_Args {
     if (arg = "--veloapp-install") {
-        ; Fresh install: default Run-on-login ON, seed Theme from the Windows Apps
-        ; theme, and set a first-run marker so the normal-launch path that follows
-        ; will surface the About dialog once (giving the user a chance to opt out
-        ; of Run-on-login immediately and see the seeded theme).
-        try RegWrite(A_ScriptFullPath, "REG_SZ", RUN_REG_KEY, RUN_REG_VALUE)
+        ; Fresh install: default Run-on-login ON via scheduled task, seed Theme
+        ; from the Windows Apps theme, and set a first-run marker so the normal-
+        ; launch path that follows will surface the About dialog once (giving the
+        ; user a chance to opt out of Run-on-login immediately).
+        CreateOrUpdateScheduledTask(0)
         try RegWrite(ReadWindowsAppsTheme(), "REG_SZ", APP_REG_KEY, APP_THEME_REG_VALUE)
         try RegWrite(1, "REG_DWORD", APP_REG_KEY, FIRST_RUN_PENDING_REG_VALUE)
         ExitApp 0
     }
     if (arg = "--veloapp-uninstall") {
-        ; Wipe everything we wrote so Windows doesn't keep launching a gone exe
-        ; at login and we don't leave stray app-scoped values behind.
+        DeleteScheduledTask()
         try RegDelete(RUN_REG_KEY, RUN_REG_VALUE)
         try RegDeleteKey(APP_REG_KEY)
         ExitApp 0
@@ -228,15 +239,33 @@ Initialize() {
     A_TrayMenu.Add("&About", ShowAbout)
     A_TrayMenu.Add()
     A_TrayMenu.Add(RUN_MENU_LABEL, ToggleRunOnLoginFromMenu)
+    A_TrayMenu.Add(ADMIN_MENU_LABEL, ToggleRunAsAdminFromMenu)
     A_TrayMenu.Add()
     A_TrayMenu.Add("E&xit", ConfirmExitFromMenu)
     A_TrayMenu.Default := "&About"
     A_TrayMenu.ClickCount := 1   ; single left-click on the app tray icon opens About (default item)
 
-    ; Seed Run-on-login state from the registry and sync UI
-    global runOnLoginState
-    runOnLoginState := ReadRegistryRunOnLogin()
+    ; v1.0.8: migrate Run-on-login from HKCU\...\Run registry key to scheduled task.
+    ; If the old registry value exists, create an equivalent task and delete the key.
+    global runOnLoginState, RUN_REG_KEY, RUN_REG_VALUE
+    if (A_IsCompiled) {
+        try {
+            val := RegRead(RUN_REG_KEY, RUN_REG_VALUE)
+            if (val != "") {
+                CreateOrUpdateScheduledTask(0)
+                try RegDelete(RUN_REG_KEY, RUN_REG_VALUE)
+            }
+        }
+    }
+
+    ; Seed Run-on-login state from the scheduled task and sync UI
+    runOnLoginState := ReadRunOnLoginState()
     UpdateRunOnLoginUI()
+
+    ; Seed Run-as-Administrator state from the registry and sync UI
+    global runAsAdminState
+    runAsAdminState := ReadRegistryRunAsAdmin()
+    UpdateRunAsAdminUI()
 
     ; Seed theme state. Compiled installs are seeded by --veloapp-install; existing
     ; pre-v1.0.3 users get a one-time seed from the Windows Apps theme on first run.
@@ -291,25 +320,21 @@ Initialize() {
 }
 
 ;==============================================================================
-; Run-on-login (Windows registry HKCU\...\Run autostart entry)
+; Run-on-login (scheduled task via COM Task Scheduler 2.0 API)
 ;==============================================================================
-; Reading + writing the registry value is the single source of truth.
-; Both the tray right-click menu item and the About-dialog checkbox sync
-; through UpdateRunOnLoginUI() after any toggle.
+; v1.0.8: Run-on-login is managed via a scheduled task instead of the
+; HKCU\...\Run registry key. Both the tray right-click menu item and the
+; About-dialog checkbox sync through UpdateRunOnLoginUI() after any toggle.
 
 IsRunOnLoginEnabled() {
     global runOnLoginState
     return runOnLoginState
 }
 
-ReadRegistryRunOnLogin() {
-    global RUN_REG_KEY, RUN_REG_VALUE
-    try {
-        val := RegRead(RUN_REG_KEY, RUN_REG_VALUE)
-        return (val != "") ? 1 : 0
-    } catch {
+ReadRunOnLoginState() {
+    if (!A_IsCompiled)
         return 0
-    }
+    return IsScheduledTaskPresent() ? 1 : 0
 }
 
 ReadRegistryTheme() {
@@ -335,17 +360,13 @@ ReadWindowsAppsTheme() {
 }
 
 SetRunOnLogin(enabled) {
-    global runOnLoginState, RUN_REG_KEY, RUN_REG_VALUE
+    global runOnLoginState
     runOnLoginState := enabled ? 1 : 0
-    ; Registry write only meaningful in compiled mode - raw .ahk's A_ScriptFullPath
-    ; isn't directly executable at Windows login. Dev toggles persist in-session
-    ; via the global only.
     if (A_IsCompiled) {
-        if (enabled) {
-            try RegWrite(A_ScriptFullPath, "REG_SZ", RUN_REG_KEY, RUN_REG_VALUE)
-        } else {
-            try RegDelete(RUN_REG_KEY, RUN_REG_VALUE)
-        }
+        if (enabled)
+            CreateOrUpdateScheduledTask(IsRunAsAdminEnabled())
+        else
+            DeleteScheduledTask()
     }
     UpdateRunOnLoginUI()
 }
@@ -377,6 +398,141 @@ OnAboutRunOnLoginToggle(ctrl, *) {
 }
 
 ;==============================================================================
+; Run as Administrator (registry preference + scheduled task RunLevel)
+;==============================================================================
+; The elevation preference is stored independently in the app registry key.
+; When Run-on-login is also enabled, the scheduled task's RunLevel reflects
+; this preference. Toggling elevation ON while non-elevated relaunches the app
+; via *RunAs (UAC prompt). Toggling OFF while elevated shows an info dialog.
+
+IsRunAsAdminEnabled() {
+    global runAsAdminState
+    return runAsAdminState
+}
+
+ReadRegistryRunAsAdmin() {
+    global APP_REG_KEY, APP_RUNAS_REG_VALUE
+    try {
+        val := RegRead(APP_REG_KEY, APP_RUNAS_REG_VALUE)
+        return (val = 1) ? 1 : 0
+    } catch {
+        return 0
+    }
+}
+
+SetRunAsAdmin(enabled) {
+    global runAsAdminState, APP_REG_KEY, APP_RUNAS_REG_VALUE
+    runAsAdminState := enabled ? 1 : 0
+    if (A_IsCompiled) {
+        try RegWrite(runAsAdminState, "REG_DWORD", APP_REG_KEY, APP_RUNAS_REG_VALUE)
+        if (IsRunOnLoginEnabled())
+            CreateOrUpdateScheduledTask(runAsAdminState)
+    }
+    UpdateRunAsAdminUI()
+}
+
+UpdateRunAsAdminUI() {
+    global ADMIN_MENU_LABEL, aboutRunAsAdminCb, runAsAdminState
+    enabled := runAsAdminState
+    try {
+        if (enabled)
+            A_TrayMenu.Check(ADMIN_MENU_LABEL)
+        else
+            A_TrayMenu.Uncheck(ADMIN_MENU_LABEL)
+    }
+    if (aboutRunAsAdminCb && IsObject(aboutRunAsAdminCb)) {
+        try aboutRunAsAdminCb.Value := enabled
+    }
+}
+
+ToggleRunAsAdminFromMenu(*) {
+    HandleRunAsAdminToggle(!IsRunAsAdminEnabled())
+}
+
+OnAboutRunAsAdminToggle(ctrl, *) {
+    HandleRunAsAdminToggle(ctrl.Value)
+}
+
+HandleRunAsAdminToggle(newValue) {
+    SetRunAsAdmin(newValue)
+    if (newValue && !A_IsAdmin) {
+        global cleanupRestoreOnExit
+        cleanupRestoreOnExit := false
+        try {
+            Run('*RunAs "' A_ScriptFullPath '"')
+            ExitApp
+        } catch {
+            cleanupRestoreOnExit := true
+            SetRunAsAdmin(0)
+        }
+    } else if (!newValue && A_IsAdmin) {
+        MsgBox("The app will launch without administrator privileges on next login.`n`nTo remove elevation now, exit and restart the app.",
+               "minimize-to-tray", "OK Iconi")
+    }
+}
+
+;==============================================================================
+; Scheduled Task (COM Task Scheduler 2.0 API)
+;==============================================================================
+; Replaces the HKCU\...\Run registry key for Run-on-login as of v1.0.8.
+; The task is a per-user logon trigger pointing at A_ScriptFullPath. RunLevel
+; is TASK_RUNLEVEL_HIGHEST when Run as Administrator is enabled, otherwise
+; TASK_RUNLEVEL_LUA (standard user).
+
+CreateOrUpdateScheduledTask(elevated := 0) {
+    global SCHED_TASK_NAME
+    if (!A_IsCompiled)
+        return
+    try {
+        svc := ComObject("Schedule.Service")
+        svc.Connect()
+        root := svc.GetFolder("\")
+        td := svc.NewTask(0)
+        td.RegistrationInfo.Description := "Start minimize-to-tray at user logon"
+        td.RegistrationInfo.Author := "bilbospocketses"
+        td.Principal.LogonType := 3       ; TASK_LOGON_INTERACTIVE_TOKEN
+        td.Principal.RunLevel := elevated ? 1 : 0  ; HIGHEST or LUA
+        trigger := td.Triggers.Create(9)  ; TASK_TRIGGER_LOGON
+        trigger.UserId := A_UserName
+        trigger.Enabled := true
+        action := td.Actions.Create(0)    ; TASK_ACTION_EXEC
+        action.Path := A_ScriptFullPath
+        s := td.Settings
+        s.Enabled := true
+        s.StartWhenAvailable := true
+        s.DisallowStartIfOnBatteries := false
+        s.StopIfGoingOnBatteries := false
+        s.ExecutionTimeLimit := "PT0S"
+        root.RegisterTaskDefinition(SCHED_TASK_NAME, td, 6, "", "", 3)
+    }
+}
+
+DeleteScheduledTask() {
+    global SCHED_TASK_NAME
+    if (!A_IsCompiled)
+        return
+    try {
+        svc := ComObject("Schedule.Service")
+        svc.Connect()
+        root := svc.GetFolder("\")
+        root.DeleteTask(SCHED_TASK_NAME, 0)
+    }
+}
+
+IsScheduledTaskPresent() {
+    global SCHED_TASK_NAME
+    try {
+        svc := ComObject("Schedule.Service")
+        svc.Connect()
+        root := svc.GetFolder("\")
+        root.GetTask(SCHED_TASK_NAME)
+        return true
+    } catch {
+        return false
+    }
+}
+
+;==============================================================================
 ; Light/Dark theme - palette + live apply
 ;==============================================================================
 GetThemePalette(name) {
@@ -389,6 +545,7 @@ GetThemePalette(name) {
             italic:       "B8B8B8",
             url:          "4DA3FF",
             checkbox:     "F2F2F2",
+            checkbox2:    "F2F2F2",
             okButton:     "F2F2F2",
             themeGlyph:   "",          ; emoji moon is color-locked; tint is ignored
             text:         "F2F2F2",    ; v1.0.7: rescue dialog body text
@@ -412,6 +569,7 @@ GetThemePalette(name) {
         italic:       "606060",
         url:          "0066CC",
         checkbox:     "000000",
+        checkbox2:    "000000",
         okButton:     "000000",
         themeGlyph:   "D9A300",        ; gold sun
         text:         "000000",
@@ -601,20 +759,28 @@ ShowAbout(*) {
     aboutControlRefs["italic"] := aboutGui.Add("Text", Format("x28 y+8 w{1} Center", contentW),
                  "minimize focused window to tray")
 
-    ; ---- Run on login (centered checkbox above the URL) ----
+    ; ---- Settings checkboxes (centered pair above the URL) ----
     ; AHK Checkbox with `w 440 Center` pins the box to the LEFT of a 440px-wide
     ; control and only centers the label - the box+label combo looks split.
     ; Instead: add at a placeholder x with no explicit width (auto-sizes to label),
     ; measure the actual width, then Move to a calculated centered x. This puts
-    ; the box directly to the left of "Run on login" as a tight unit.
-    global aboutRunOnLoginCb
+    ; the box directly to the left of its label as a tight unit.
+    global aboutRunOnLoginCb, aboutRunAsAdminCb
     aboutGui.SetFont("s10 Norm c000000", "Segoe UI")
+
     aboutRunOnLoginCb := aboutGui.Add("Checkbox", "x28 y+20", "Run on login")
     aboutRunOnLoginCb.Value := IsRunOnLoginEnabled()
     aboutRunOnLoginCb.OnEvent("Click", OnAboutRunOnLoginToggle)
     aboutRunOnLoginCb.GetPos(, &cbY, &cbW, )
     aboutRunOnLoginCb.Move(28 + (contentW - cbW) // 2, cbY)
     aboutControlRefs["checkbox"] := aboutRunOnLoginCb
+
+    aboutRunAsAdminCb := aboutGui.Add("Checkbox", "x28 y+8", "Run as Administrator")
+    aboutRunAsAdminCb.Value := IsRunAsAdminEnabled()
+    aboutRunAsAdminCb.OnEvent("Click", OnAboutRunAsAdminToggle)
+    aboutRunAsAdminCb.GetPos(, &cbY2, &cbW2, )
+    aboutRunAsAdminCb.Move(28 + (contentW - cbW2) // 2, cbY2)
+    aboutControlRefs["checkbox2"] := aboutRunAsAdminCb
 
     ; ---- Footer (clickable URL + OK) ----
     ; URL styled as a link (blue + underline). Click opens in default browser.
@@ -648,7 +814,8 @@ ShowAbout(*) {
 }
 
 CloseAbout() {
-    global aboutGui, aboutDot, pulseTimer, aboutRunOnLoginCb, aboutThemeIcon, aboutControlRefs
+    global aboutGui, aboutDot, pulseTimer, aboutRunOnLoginCb, aboutRunAsAdminCb
+    global aboutThemeIcon, aboutControlRefs
     if (pulseTimer) {
         SetTimer(pulseTimer, 0)
         pulseTimer := 0
@@ -661,6 +828,7 @@ CloseAbout() {
     aboutGui := 0
     aboutDot := 0
     aboutRunOnLoginCb := 0
+    aboutRunAsAdminCb := 0
     aboutThemeIcon := 0
     aboutControlRefs := ""
 }
