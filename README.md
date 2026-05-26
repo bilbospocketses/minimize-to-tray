@@ -67,7 +67,7 @@ The About dialog contains:
 
 - App icon + name + version.
 - Trigger reminder.
-- **Run on login** checkbox (mirrors the tray menu's toggle). Managed via a Windows Scheduled Task (not the registry Run key).
+- **Run on login** checkbox (mirrors the tray menu's toggle). Managed via a Windows Scheduled Task.
 - **Run as Administrator** checkbox (mirrors the tray menu's toggle). When enabled, the app relaunches elevated and future logins start elevated automatically. When disabled, the app relaunches without elevation. Changes made via the checkboxes are applied when the dialog closes. See [Troubleshooting](#minimizing-fails-on-certain-windows-elevation-mismatch) for when you'd want this.
 - Clickable GitHub URL.
 - **Light / Dark theme toggle** (☀ / 🌙 glyph) in the top-right corner. Click to flip — dialog body and OS title bar re-style live without reopen. Fresh installs default to your current Windows Apps theme.
