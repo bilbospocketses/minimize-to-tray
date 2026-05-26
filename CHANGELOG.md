@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.9] - 2026-05-26
 
 ### Added
-- **Run as Administrator** setting. New checkbox in the About dialog and tray right-click menu. When enabled, the app relaunches elevated (UAC prompt) and persists the preference in the registry (`HKCU\Software\bilbospocketses\minimize-to-tray\RunAsAdmin`). Future logins start elevated automatically via the scheduled task's "Run with highest privileges" flag. Toggling off relaunches non-elevated immediately via a one-shot `TASK_TRIGGER_REGISTRATION` scheduled task (drops privilege cleanly without UAC). The setting is independent of Run on login — the elevation preference persists even when the scheduled task doesn't exist.
+- **Run as Administrator** setting. New checkbox in the About dialog and tray right-click menu. When enabled, the app relaunches elevated (UAC prompt) and persists the preference in the registry (`HKCU\Software\bilbospocketses\minimize-to-tray\RunAsAdmin`). Future logins start elevated automatically via the scheduled task's "Run with highest privileges" flag. Toggling off relaunches non-elevated immediately via `runas /trustlevel:0x20000` (drops privilege cleanly without UAC). The setting is independent of Run on login — the elevation preference persists even when the scheduled task doesn't exist.
 - Elevation troubleshooting section in README: when `Win+Shift+Z` or middle-click fails on certain windows, the cause is usually an elevation mismatch (app running elevated, tray utility not).
 
 ### Changed (About dialog)

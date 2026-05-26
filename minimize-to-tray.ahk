@@ -477,20 +477,7 @@ RelaunchNonElevated() {
     global cleanupRestoreOnExit
     cleanupRestoreOnExit := false
     try {
-        svc := ComObject("Schedule.Service")
-        svc.Connect()
-        root := svc.GetFolder("\")
-        td := svc.NewTask(0)
-        td.Principal.LogonType := 3
-        td.Principal.RunLevel := 0       ; TASK_RUNLEVEL_LUA — non-elevated
-        td.Triggers.Create(7)            ; TASK_TRIGGER_REGISTRATION — fires immediately
-        action := td.Actions.Create(0)
-        action.Path := A_ScriptFullPath
-        s := td.Settings
-        s.DisallowStartIfOnBatteries := false
-        s.StopIfGoingOnBatteries := false
-        s.ExecutionTimeLimit := "PT0S"
-        root.RegisterTaskDefinition("minimize-to-tray-relaunch", td, 6, "", "", 3)
+        Run('runas /trustlevel:0x20000 "' A_ScriptFullPath '"',, "Hide")
         ExitApp
     } catch {
         cleanupRestoreOnExit := true
