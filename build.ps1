@@ -33,7 +33,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$Version = '1.0.11',
+    [string]$Version = '1.0.12',
     [switch]$SkipHelper
 )
 
