@@ -815,8 +815,8 @@ ShowAbout(*) {
     okBtn.OnEvent("Click", (*) => ApplyAboutAndClose())
     aboutControlRefs["okButton"] := okBtn
 
-    aboutGui.OnEvent("Close",  (*) => ApplyAboutAndClose())
-    aboutGui.OnEvent("Escape", (*) => ApplyAboutAndClose())
+    aboutGui.OnEvent("Close",  (*) => CloseAbout())
+    aboutGui.OnEvent("Escape", (*) => CloseAbout())
 
     ; Initial theme paint - applies background + per-control colors before show.
     ApplyThemeToAbout()
