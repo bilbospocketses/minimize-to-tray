@@ -10,11 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.15] - 2026-05-27
 
 ### Added
-- **Run as Administrator** setting. New checkbox in the About dialog and tray right-click menu. When enabled, the app relaunches elevated (UAC prompt) and persists the preference in the registry (`HKCU\Software\bilbospocketses\minimize-to-tray\RunAsAdmin`). Future logins start elevated automatically via the scheduled task's "Run with highest privileges" flag. Toggling off relaunches non-elevated immediately via `runas /trustlevel:0x20000` (drops privilege cleanly without UAC). The setting is independent of Run on login — the elevation preference persists even when the scheduled task doesn't exist.
+- **Run as Administrator** setting. New checkbox in the About dialog and tray right-click menu. When enabled, the app relaunches elevated (UAC prompt) and persists the preference in the registry (`HKCU\Software\bilbospocketses\minimize-to-tray\RunAsAdmin`). Future logins start elevated automatically via the scheduled task's "Run with highest privileges" flag. Toggling off relaunches non-elevated immediately via `explorer.exe` shell delegation (the running non-elevated Explorer launches the new instance at its own integrity level). The setting is independent of Run on login — the elevation preference persists even when the scheduled task doesn't exist.
+- **Startup elevation enforcement.** If the `RunAsAdmin` registry preference is set, any launch (manual or scheduled task) triggers UAC automatically before the app appears. Declining UAC lets the app continue non-elevated.
+- **Automated release workflow.** New `release.yml` triggers on `v*` tag push — builds via `build.ps1`, generates SHA256SUMS, attests build provenance via Sigstore, and publishes the GitHub Release with all Velopack assets via `softprops/action-gh-release`.
 - Elevation troubleshooting section in README: when `Win+Shift+Z` or middle-click fails on certain windows, the cause is usually an elevation mismatch (app running elevated, tray utility not).
 
 ### Changed (About dialog)
-- Settings checkboxes (Run on login, Run as Administrator) now tally pending state while the dialog is open. Changes are applied when the dialog closes (OK, close button, or Escape) — no mid-dialog relaunches.
+- Settings checkboxes (Run on login, Run as Administrator) now tally pending state while the dialog is open. Changes are applied on OK — X and Escape discard. No mid-dialog relaunches.
 
 ### Changed
 - **Run on login now uses a Windows Scheduled Task** instead of the `HKCU\...\Run` registry key. The COM Task Scheduler 2.0 API creates a per-user logon-triggered task named `minimize-to-tray`. Existing registry Run entries are migrated to a scheduled task on first v1.0.8 launch and the registry value is deleted. This unifies both settings under a single mechanism — toggling "Run as Administrator" is a simple RunLevel adjustment on the same task.
