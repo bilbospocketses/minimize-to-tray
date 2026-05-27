@@ -280,6 +280,8 @@ Initialize() {
             ExitApp
         }
     }
+    if (runAsAdminState && A_IsAdmin && A_IsCompiled && IsRunOnLoginEnabled())
+        CreateOrUpdateScheduledTask(1)
 
     ; Seed theme state. Compiled installs are seeded by --veloapp-install; existing
     ; pre-v1.0.3 users get a one-time seed from the Windows Apps theme on first run.
