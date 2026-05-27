@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.17] - 2026-05-27
+
+### Fixed
+- **AHK alpha compatibility: uninitialized `ctrlHwnd` in About tooltip handler.** On AHK v2 alpha builds with stricter variable initialization rules, `MouseGetPos` could fail without throwing, leaving `ctrlHwnd` uninitialized and crashing on the subsequent `aboutThemeIcon.Hwnd` comparison. Pre-initialize the variable before the `try` block so it always has a value regardless of AHK version.
+
 ## [1.0.16] - 2026-05-27
 
 ### Fixed

@@ -60,7 +60,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.16"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.17"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
@@ -902,6 +902,7 @@ UpdateAboutHoverTooltips() {
         return
     }
 
+    ctrlHwnd := 0
     try {
         MouseGetPos(, , , &ctrlHwnd, 2)
     } catch {
