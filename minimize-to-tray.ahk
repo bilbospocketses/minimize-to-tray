@@ -42,6 +42,11 @@ global WINEVENT_OUTOFCONTEXT := 0
 
 global HTCAPTION           := 2
 
+; Registered at runtime via RegisterWindowMessage("TaskbarCreated"). Explorer
+; broadcasts this when the notification area is (re)created — logon race and
+; explorer.exe crash/restart both surface here.
+global WM_TASKBARCREATED   := 0
+
 ; NOTIFYICONDATAW size = 976 bytes on Windows 10/11 x64.
 global NID_SIZE := 976
 
@@ -55,7 +60,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.15"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.16"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
@@ -195,6 +200,14 @@ Initialize() {
 
     ; Register handler for tray callback message (WM_TRAYCALLBACK = 0x0401).
     OnMessage(WM_TRAYCALLBACK, OnTrayMessage)
+
+    ; Register TaskbarCreated so we re-add tray icons when explorer (re)creates
+    ; the notification area — covers the logon race (task fires before explorer
+    ; is ready) and explorer.exe crash/restart during a session.
+    global WM_TASKBARCREATED
+    WM_TASKBARCREATED := DllCall("RegisterWindowMessageW", "Str", "TaskbarCreated", "UInt")
+    if (WM_TASKBARCREATED)
+        OnMessage(WM_TASKBARCREATED, OnTaskbarCreated)
 
     ; Custom app tray icon. When running as compiled .exe, the embedded icon
     ; (set via Ahk2Exe /icon during compile) is already used by default.
@@ -1481,6 +1494,29 @@ ShowGroupMenu(procName) {
     groupMenu.Add("Restore &All", RestoreAll.Bind(procName))
     groupMenu.Add("Close A&ll",   CloseAll.Bind(procName))
     groupMenu.Show()
+}
+
+;==============================================================================
+; TaskbarCreated - explorer (re)created the notification area
+;==============================================================================
+OnTaskbarCreated(wParam, lParam, msg, hwnd) {
+    global Groups
+
+    ; Force AHK's own tray icon re-registration. Compiled exe uses its embedded
+    ; icon resource; raw .ahk points at the source file.
+    if (A_IsCompiled)
+        TraySetIcon(A_ScriptFullPath)
+    else {
+        iconPath := A_ScriptDir "\assets\app.ico"
+        if (FileExist(iconPath))
+            TraySetIcon(iconPath)
+    }
+
+    ; Re-register every per-group tray icon (windows currently minimized to tray).
+    for procName, group in Groups {
+        ShellNotifyAdd(group.trayUid, group.hIcon, procName)
+        UpdateGroupTooltip(procName)
+    }
 }
 
 ;==============================================================================

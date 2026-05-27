@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.16] - 2026-05-27
+
+### Fixed
+- **Tray icon missing after logon.** The scheduled task could fire before explorer.exe finished creating the notification area, causing `Shell_NotifyIcon` to fail silently — the process ran (hotkeys worked) but was invisible in the tray. Now listens for the `TaskbarCreated` registered message and re-registers the app tray icon and any per-group icons when explorer (re)creates the notification area. Also covers explorer.exe crash/restart during a session.
+
 ## [1.0.15] - 2026-05-27
 
 ### Added
