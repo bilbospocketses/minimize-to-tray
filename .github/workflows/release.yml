@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        with:
+          dotnet-version: 10.x
+
+      - name: Restore dotnet local tools (vpk)
+        run: dotnet tool restore
+
+      - name: Build via build.ps1
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Generate SHA256SUMS
+        shell: pwsh
+        run: |
+          $hashes = Get-ChildItem dist/ -File | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          }
+          $hashes | Set-Content dist/SHA256SUMS
+          Get-Content dist/SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            dist/minimize-to-tray-win-Setup.exe
+            dist/minimize-to-tray-win-Portable.zip
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          body: |
+            See [CHANGELOG.md](https://github.com/bilbospocketses/minimize-to-tray/blob/main/CHANGELOG.md) for full details.
+          files: |
+            dist/minimize-to-tray-win-Setup.exe
+            dist/minimize-to-tray-win-Portable.zip
+            dist/minimize-to-tray-*-full.nupkg
+            dist/RELEASES
+            dist/releases.win.json
+            dist/assets.win.json
+            dist/SHA256SUMS
