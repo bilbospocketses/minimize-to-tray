@@ -60,7 +60,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.17"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.18"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
@@ -532,13 +532,17 @@ CreateOrUpdateScheduledTask(elevated := 0) {
         trigger.UserId := A_UserName
         trigger.Enabled := true
         action := td.Actions.Create(0)    ; TASK_ACTION_EXEC
-        action.Path := A_ScriptFullPath
+        ; Fire-and-forget: cmd starts the app detached and exits immediately
+        ; so the task transitions to Ready instead of staying Running for the
+        ; lifetime of the persistent AHK process.
+        action.Path := A_WinDir "\System32\cmd.exe"
+        action.Arguments := '/c start "" "' . A_ScriptFullPath . '"'
         s := td.Settings
         s.Enabled := true
         s.StartWhenAvailable := true
         s.DisallowStartIfOnBatteries := false
         s.StopIfGoingOnBatteries := false
-        s.ExecutionTimeLimit := "PT0S"
+        s.ExecutionTimeLimit := "PT30S"
         root.RegisterTaskDefinition(SCHED_TASK_NAME, td, 6, "", "", 3)
     }
 }
@@ -1503,8 +1507,12 @@ ShowGroupMenu(procName) {
 OnTaskbarCreated(wParam, lParam, msg, hwnd) {
     global Groups
 
-    ; Force AHK's own tray icon re-registration. Compiled exe uses its embedded
-    ; icon resource; raw .ahk points at the source file.
+    ; Explorer destroyed all notification icons when it recreated the area.
+    ; AHK still thinks its icon is registered, so TraySetIcon alone calls
+    ; NIM_MODIFY on a nonexistent icon (silent failure). Toggle A_IconHidden
+    ; to force a full NIM_DELETE + NIM_ADD cycle.
+    A_IconHidden := true
+    A_IconHidden := false
     if (A_IsCompiled)
         TraySetIcon(A_ScriptFullPath)
     else {

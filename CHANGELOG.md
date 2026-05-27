@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.18] - 2026-05-27
+
+### Fixed
+- **App tray icon missing after logon (v1.0.16 follow-up).** The v1.0.16 `TaskbarCreated` handler called `TraySetIcon` which internally uses `NIM_MODIFY` -- but explorer destroyed all icon registrations when it recreated the notification area, so the modify targeted a nonexistent icon and failed silently. Now toggles `A_IconHidden` before `TraySetIcon` to force a full `NIM_DELETE` + `NIM_ADD` cycle, re-registering the icon from scratch.
+- **Scheduled task stuck in Running state.** The logon task ran `minimize-to-tray.exe` directly; since the persistent AHK process never exits, Task Scheduler showed the task as "Running" indefinitely. Now uses `cmd.exe /c start` as a fire-and-forget wrapper -- cmd starts the app detached and exits immediately, so the task transitions to Ready within seconds.
+
 ## [1.0.17] - 2026-05-27
 
 ### Fixed
@@ -109,8 +115,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo hardened to CM-parity security baseline per the lockdown protocol: Dependabot alerts + automated security updates + secret scanning + push protection + Private Vulnerability Reporting all enabled. Actions allowlist active with `sha_pinning_required: true`. Squash-only merge policy. Branch ruleset on `main`: required signatures + linear history + PR-only changes + required status checks (`build-and-test` + `Scorecard analysis`). Tag ruleset on `refs/tags/v*`: required signatures + non-fast-forward + no deletion.
 - All workflow actions SHA-pinned to commit objects with precise `# vX.Y.Z` comments per the OpenSSF Scorecard imposter-commit verifier + Dependabot version-tracking lessons.
 
-[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.17...HEAD
-[1.0.17]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.17
+[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.18...HEAD
+[1.0.18]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.18
+[1.0.17]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.16...v1.0.17
 [1.0.16]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.15...v1.0.16
 [1.0.15]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.15
 [1.0.7]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.7
