@@ -109,11 +109,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo hardened to CM-parity security baseline per the lockdown protocol: Dependabot alerts + automated security updates + secret scanning + push protection + Private Vulnerability Reporting all enabled. Actions allowlist active with `sha_pinning_required: true`. Squash-only merge policy. Branch ruleset on `main`: required signatures + linear history + PR-only changes + required status checks (`build-and-test` + `Scorecard analysis`). Tag ruleset on `refs/tags/v*`: required signatures + non-fast-forward + no deletion.
 - All workflow actions SHA-pinned to commit objects with precise `# vX.Y.Z` comments per the OpenSSF Scorecard imposter-commit verifier + Dependabot version-tracking lessons.
 
-[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.6...HEAD
-[1.0.6]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.6
-[1.0.5]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.5
-[1.0.4]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.4
-[1.0.3]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.3
-[1.0.2]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.2
+[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.17...HEAD
+[1.0.17]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.17
+[1.0.16]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.15...v1.0.16
+[1.0.15]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.15
+[1.0.7]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.7
+[1.0.6]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.5...v1.0.6
+[1.0.5]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.4...v1.0.5
+[1.0.4]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.3...v1.0.4
+[1.0.3]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.2...v1.0.3
+[1.0.2]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.1
 [1.0.0]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.0
