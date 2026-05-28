@@ -6,7 +6,7 @@ on:
 
 jobs:
   build-and-release:
-    runs-on: windows-latest
+    runs-on: windows-2025  # pinned (was windows-latest, which GitHub is migrating to win-2025 by 2026-06-15)
     permissions:
       contents: write
       id-token: write

@@ -36,7 +36,7 @@ permissions:
 
 jobs:
   build-and-test:
-    runs-on: windows-latest
+    runs-on: windows-2025  # pinned (was windows-latest, which GitHub is migrating to win-2025 by 2026-06-15)
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
