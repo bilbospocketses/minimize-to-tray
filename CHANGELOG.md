@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.19] - 2026-05-28
+
+### Changed
+- **Velopack upgraded to 1.0.1 (GA).** Bumped both the `vpk` packaging CLI (`dotnet-tools.json`) and the `updater-helper` `Velopack` SDK reference from the pre-release `0.0.1589-ga2c5a97` to the `1.0.1` general-availability release, in lockstep. No change to the helper's update logic -- the core update API surface (`UpdateManager` / `GithubSource` / check / download / apply-and-restart) is unchanged. This moves the in-app update mechanism onto Velopack's first stable release.
+
 ## [1.0.18] - 2026-05-27
 
 ### Fixed
@@ -115,7 +120,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo hardened to CM-parity security baseline per the lockdown protocol: Dependabot alerts + automated security updates + secret scanning + push protection + Private Vulnerability Reporting all enabled. Actions allowlist active with `sha_pinning_required: true`. Squash-only merge policy. Branch ruleset on `main`: required signatures + linear history + PR-only changes + required status checks (`build-and-test` + `Scorecard analysis`). Tag ruleset on `refs/tags/v*`: required signatures + non-fast-forward + no deletion.
 - All workflow actions SHA-pinned to commit objects with precise `# vX.Y.Z` comments per the OpenSSF Scorecard imposter-commit verifier + Dependabot version-tracking lessons.
 
-[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.18...HEAD
+[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.19...HEAD
+[1.0.19]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.18...v1.0.19
 [1.0.18]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.18
 [1.0.17]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.16...v1.0.17
 [1.0.16]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.15...v1.0.16

@@ -33,7 +33,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Velopack" Version="0.0.1589-ga2c5a97" />
+    <PackageReference Include="Velopack" Version="1.0.1" />
   </ItemGroup>
 
 </Project>
