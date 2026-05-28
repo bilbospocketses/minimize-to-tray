@@ -63,7 +63,7 @@ Do not include AI-generated attribution lines in commit messages.
 `main` is the development branch and is **PR-gated**. Direct pushes to main are blocked at the ruleset level; every change goes branch -> PR -> required checks green -> squash-merge.
 
 **Required status checks** (all must be green before merge):
-- `build-and-test` — runs `build.ps1` on `windows-latest`
+- `build-and-test` — runs `build.ps1` on `windows-2025`
 - `Analyze (csharp)` — CodeQL static analysis on `updater-helper/`
 - `Analyze (actions)` — CodeQL static analysis on workflow YAML
 - `Scorecard analysis` — OpenSSF supply-chain scoring

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **CI: pinned the GitHub-hosted Windows runner to `windows-2025`.** Both `ci.yml` (`build-and-test`) and `release.yml` (`build-and-release`) previously ran on `windows-latest`, which GitHub is migrating to Windows Server 2025 by 2026-06-15; pinning to the explicit label removes the moving target. The plain `windows-2025` image suffices -- the build installs .NET via `actions/setup-dotnet` and compiles AHK with the vendored Ahk2Exe -- so the `windows-2025-vs2026` variant is not needed.
+
 ## [1.0.19] - 2026-05-28
 
 ### Changed
