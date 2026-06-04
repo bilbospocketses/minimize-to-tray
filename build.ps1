@@ -27,8 +27,8 @@
     without re-publishing the helper, which adds ~10-15 seconds).
 
 .NOTES
-    Output: dist/<appkey>-<version>-win-Setup.exe + dist/<appkey>-<version>-win-full.nupkg
-    + dist/RELEASES.
+    Output (dist/): minimize-to-tray-win-Setup.exe + minimize-to-tray-win-Portable.zip
+    + minimize-to-tray-<version>-full.nupkg + RELEASES + releases.win.json + assets.win.json.
 #>
 
 [CmdletBinding()]

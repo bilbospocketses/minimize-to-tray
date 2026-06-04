@@ -19,22 +19,25 @@ dotnet tool restore   # pins vpk per dotnet-tools.json
 ./build.ps1           # produces dist/minimize-to-tray-win-Setup.exe etc.
 ```
 
-To iterate on the AHK script without rebuilding the .exe each time:
+To iterate on the AHK script without rebuilding the .exe each time, run it with the
+vendored AutoHotkey v2 interpreter — no system AHK install required:
 
 ```powershell
-& 'C:/Program Files/AutoHotkey/v2/AutoHotkey.exe' .\minimize-to-tray.ahk
+& '.\dependencies\autohotkey\v2.0.26\AutoHotkey64.exe' .\minimize-to-tray.ahk
 # or with the dev flag forcing the update-available dot for UI smoke:
-& 'C:/Program Files/AutoHotkey/v2/AutoHotkey.exe' .\minimize-to-tray.ahk /devshowdot
+& '.\dependencies\autohotkey\v2.0.26\AutoHotkey64.exe' .\minimize-to-tray.ahk /devshowdot
 ```
 
 ## Project Structure
 
 ```
-minimize-to-tray.ahk        AutoHotkey v2 script (single-file, ~500 lines)
+minimize-to-tray.ahk        AutoHotkey v2 script (single-file)
 build.ps1                   Build chain: Ahk2Exe -> dotnet publish -> vpk pack
 updater-helper/             .NET 10 Velopack update bridge (CLI: `check`, `update`)
+dotnet-tools.json           Project-pinned vpk (Velopack CLI)
 assets/                     App icon (.ico, .png) + source materials
 dependencies/               Vendored AutoHotkey runtime + Ahk2Exe compiler
+.github/                    Dependabot config + CI / Scorecard workflows
 docs/specs/                 Design specs
 docs/plans/                 Implementation plans
 ```

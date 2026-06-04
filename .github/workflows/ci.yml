@@ -14,7 +14,7 @@
 #   3. Upload dist/ as an artifact for inspection.
 #
 # There's no separate test suite (AHK has no standard test framework that
-# justifies the setup cost for a single ~400-line script). The build chain
+# justifies the setup cost for a single-file script). The build chain
 # itself is the smoke: if vpk pack succeeds, all three sub-steps succeeded.
 #
 # All actions are SHA-pinned per the repo-level `sha_pinning_required`
