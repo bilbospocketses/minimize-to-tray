@@ -33,7 +33,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$Version = '1.0.20',
+    [string]$Version = '1.0.21',
     [switch]$SkipHelper
 )
 
@@ -146,6 +146,24 @@ Write-Host ('      packDir : ' + $stagingDir)
 Write-Host ('      mainExe : ' + $mainExeName)
 Write-Host ('      icon    : ' + $icon)
 
+# Extract the release notes for $Version from CHANGELOG.md and hand them to vpk via
+# --releaseNotes, so Velopack embeds them in the package + releases feed. The in-app
+# update dialog reads them back through Velopack's NotesMarkdown. Mirrors tiny11options'
+# CI extraction, but lives here because mtt packs inside build.ps1. The temp file is
+# written OUTSIDE $stagingDir on purpose -- staging is the --packDir, so anything in it
+# would get bundled into the app.
+$changelogPath = Join-Path $repoRoot 'CHANGELOG.md'
+$changelogText = Get-Content -LiteralPath $changelogPath -Raw
+$notesPattern  = "(?ms)^## \[$([regex]::Escape($Version))\][^\n]*\n(.+?)(?=^## \[|\z)"
+$notesMatch    = [regex]::Match($changelogText, $notesPattern)
+if (-not $notesMatch.Success) {
+    throw "No CHANGELOG.md section for version $Version. Expected a '## [$Version] - YYYY-MM-DD' header before building a release."
+}
+$releaseNotes = $notesMatch.Groups[1].Value.Trim()
+$notesFile    = New-TemporaryFile
+Set-Content -LiteralPath $notesFile.FullName -Value $releaseNotes -Encoding utf8
+Write-Host ('      notes   : ' + $notesFile.FullName + ' (' + (($releaseNotes -split "`n").Count) + ' lines)')
+
 Push-Location $repoRoot
 try {
     & dotnet vpk pack `
@@ -156,12 +174,14 @@ try {
         --packDir     $stagingDir `
         --mainExe     $mainExeName `
         --icon        $icon `
+        --releaseNotes $notesFile.FullName `
         --outputDir   $distDir
     if ($LASTEXITCODE -ne 0) {
         throw "vpk pack failed with exit code $LASTEXITCODE"
     }
 } finally {
     Pop-Location
+    Remove-Item -LiteralPath $notesFile.FullName -Force -ErrorAction SilentlyContinue
 }
 
 # Clean the staging folder (no longer needed - vpk has packed everything)
