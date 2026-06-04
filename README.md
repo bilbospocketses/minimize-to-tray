@@ -29,7 +29,7 @@ The AutoHotkey runtime is bundled into the executable either way — there's not
 
 ### Updates
 
-When a newer version is published to the [Releases page](https://github.com/bilbospocketses/minimize-to-tray/releases), the app's About dialog shows a pulsing blue dot to the left of the theme toggle in the top-right corner. Click the dot to download and apply the update in place — the app restarts on the new version automatically.
+When a newer version is published to the [Releases page](https://github.com/bilbospocketses/minimize-to-tray/releases), the app's About dialog shows a pulsing blue dot to the left of the theme toggle in the top-right corner. Click the dot to open an **update dialog** showing the new version and its release notes (what changed) — then choose **Update now** to download and apply it in place (the app restarts on the new version automatically) or **Later** to dismiss.
 
 The update check fires twice: ~5 seconds after each launch, and whenever you open the About dialog. While the check runs you may see a brief hourglass cursor. If a check happens to find an update while About is currently open, the dot pops in live — no need to close and reopen.
 
@@ -71,7 +71,7 @@ The About dialog contains:
 - **Run as Administrator** checkbox (mirrors the tray menu's toggle). When enabled, the app relaunches elevated and future logins start elevated automatically. When disabled, the app relaunches without elevation. Changes are applied on **OK**; closing with X or Escape discards. See [Troubleshooting](#minimizing-fails-on-certain-windows-elevation-mismatch) for when you'd want this.
 - Clickable GitHub URL.
 - **Light / Dark theme toggle** (☀ / 🌙 glyph) in the top-right corner. Click to flip — dialog body and OS title bar re-style live without reopen. Fresh installs default to your current Windows Apps theme.
-- Pulsing blue update dot to the left of the theme toggle when a newer version is available.
+- Pulsing blue update dot to the left of the theme toggle when a newer version is available — click it to review what changed and choose whether to update.
 
 ## Known limitations
 
