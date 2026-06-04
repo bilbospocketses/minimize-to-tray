@@ -60,9 +60,10 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.20"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.21"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
+global UpdateNotes      := ""            ; release notes for UpdateVersion, from updater-helper check
 global pulsePhase       := 0.0           ; phase angle for the About dialog's pulsing dot animation
 global appImagePath     := ""            ; resolved at script init - source file in dev, %TEMP% in compiled
 
@@ -181,6 +182,7 @@ for arg in A_Args {
     if (arg = "/devshowdot") {
         UpdateAvailable := true
         UpdateVersion := "1.0.99-dev"
+        UpdateNotes := DevSampleNotes()
     }
     if (arg = "/devsimulateupdate") {
         DevSimulateUpdate := true
@@ -702,6 +704,7 @@ ToggleTheme(*) {
 global aboutGui    := 0
 global aboutDot    := 0
 global pulseTimer  := 0
+global updateGui   := 0   ; the update-notification modal Gui (or 0 when closed)
 
 ShowAbout(*) {
     global aboutGui, aboutDot, pulseTimer, APP_VERSION, UpdateAvailable, UpdateVersion
@@ -968,31 +971,25 @@ OnClickUpdateDot(*) {
     global UpdateAvailable
     if (!UpdateAvailable)
         return
-
-    ; Spawn the Velopack helper to download + apply + restart.
-    helperPath := A_ScriptDir "\updater-helper.exe"
-    if (!FileExist(helperPath)) {
-        MsgBox("Update helper missing at: " helperPath, "minimize-to-tray", "IconX")
-        return
-    }
-    Run(Format('"{1}" update', helperPath))
-    ; updater-helper handles the restart; our OnExit fires and Velopack swaps the install.
-    ExitApp()
+    ; v1.0.21: open the notes dialog instead of updating silently. The actual
+    ; Velopack apply now runs from the dialog's "Update now" (UpdateNowFromDialog).
+    ShowUpdateDialog()
 }
 
 ;------------------------------------------------------------------------------
 ; Velopack update check (async, fire-and-forget)
 ;------------------------------------------------------------------------------
 CheckForUpdateAsync() {
-    global UpdateAvailable, UpdateVersion, A_IsCompiled, DevSimulateUpdate
+    global UpdateAvailable, UpdateVersion, UpdateNotes, A_IsCompiled, DevSimulateUpdate
 
-    ; Dev short-circuit: /devsimulateupdate flag bypasses the helper entirely
-    ; and just flips UpdateAvailable + AddUpdateDotToAbout. Smoke test for the
-    ; live-inject path. The "!UpdateAvailable" guard prevents repeated triggers
-    ; once already flipped (this function fires from multiple call sites).
+    ; Dev short-circuit: /devsimulateupdate flag bypasses the helper entirely and
+    ; flips UpdateAvailable + seeds sample notes + AddUpdateDotToAbout. Smoke test
+    ; for the live-inject path AND the update dialog. The "!UpdateAvailable" guard
+    ; prevents repeated triggers once flipped (this fires from multiple call sites).
     if (DevSimulateUpdate && !UpdateAvailable) {
         UpdateAvailable := true
         UpdateVersion := "1.0.99-dev"
+        UpdateNotes := DevSampleNotes()
         AddUpdateDotToAbout()
         return
     }
@@ -1009,15 +1006,29 @@ CheckForUpdateAsync() {
         shell := ComObject("WScript.Shell")
         exec := shell.Exec(Format('"{1}" check', helperPath))
         exec.StdIn.Close()
-        result := Trim(exec.StdOut.ReadAll(), " `t`r`n")
+        raw := exec.StdOut.ReadAll()
         exitCode := exec.ExitCode
     } catch as err {
         return  ; helper failed; silently swallow
     }
 
-    if (exitCode == 0 && result != "" && result != APP_VERSION) {
+    ; Contract with updater-helper check: line 1 = version, everything after the
+    ; first newline = the notes blob. Normalize CRLF->LF first so the split is
+    ; line-ending agnostic.
+    raw := StrReplace(raw, "`r`n", "`n")
+    nlPos := InStr(raw, "`n")
+    if (nlPos) {
+        verLine := Trim(SubStr(raw, 1, nlPos - 1), " `t`n")
+        notesBlob := Trim(SubStr(raw, nlPos + 1), " `t`n")
+    } else {
+        verLine := Trim(raw, " `t`n")
+        notesBlob := ""
+    }
+
+    if (exitCode == 0 && verLine != "" && verLine != APP_VERSION) {
         UpdateAvailable := true
-        UpdateVersion := result
+        UpdateVersion := verLine
+        UpdateNotes := notesBlob
         ; v1.0.5: if About is currently open, inject the dot live so the user
         ; sees it without having to close + reopen the dialog.
         AddUpdateDotToAbout()
@@ -1048,6 +1059,144 @@ AddUpdateDotToAbout() {
     aboutDot.OnEvent("Click", OnClickUpdateDot)
     pulseTimer := PulseDot
     SetTimer(pulseTimer, 40)
+}
+
+;==============================================================================
+; Update-available notes dialog
+;==============================================================================
+; Clicking the pulsing dot opens this themed modal instead of updating silently.
+; It shows the new version + its release notes (raw text, scrollable) and only
+; runs the Velopack update when the user clicks "Update now". Structure + theming
+; mirror the exit-confirmation dialog (ApplyThemeToExitDialog): BackColor + text
+; colors + inline DWM dark title bar + ApplyDarkModeToGui for native controls.
+
+NormalizeToCRLF(s) {
+    ; Win32 Edit controls render line breaks only on CRLF. NotesMarkdown may arrive
+    ; with bare LF (or already-CRLF). Collapse to LF, then expand to CRLF, so we
+    ; never emit CR-CR-LF.
+    return StrReplace(StrReplace(s, "`r`n", "`n"), "`n", "`r`n")
+}
+
+DevSampleNotes() {
+    ; Multi-line sample so /devshowdot + /devsimulateupdate can exercise the dialog
+    ; (scrolling, wrapping, theming) without a real release.
+    return "### Added`n"
+         . "- Update notification dialog: clicking the blue dot now shows what an update contains before installing.`n"
+         . "`n"
+         . "### Changed`n"
+         . "- build.ps1 embeds the CHANGELOG section as Velopack release notes.`n"
+         . "- updater-helper check now returns the version and its notes.`n"
+         . "`n"
+         . "### Notes`n"
+         . "- This is sample text shown only under /devshowdot or /devsimulateupdate, long enough to demonstrate vertical scrolling and word wrapping inside the read-only notes box."
+}
+
+ShowUpdateDialog() {
+    global updateGui, UpdateVersion, UpdateNotes, themeState
+
+    ; Already open (double-click race) -> bring it forward.
+    if (IsObject(updateGui)) {
+        try updateGui.Show()
+        return
+    }
+
+    updateGui := Gui("+AlwaysOnTop -MinimizeBox -MaximizeBox", "Update available")
+    updateGui.OnEvent("Close",  (*) => CloseUpdateDialog())
+    updateGui.OnEvent("Escape", (*) => CloseUpdateDialog())
+    updateGui.MarginX := 18
+    updateGui.MarginY := 16
+
+    ; Header: app name + new version.
+    updateGui.SetFont("s13 Bold", "Segoe UI")
+    txtTitle := updateGui.AddText("xm w440", "minimize-to-tray  v" UpdateVersion)
+
+    updateGui.SetFont("s10 Norm", "Segoe UI")
+    txtWhat := updateGui.AddText("xm w440", "What's new:")
+
+    ; Notes: read-only, multi-line (r14 rows), vertically scrollable. Win32 Edit
+    ; needs CRLF; normalize first. Empty -> friendly fallback.
+    notesText := (Trim(UpdateNotes) != "") ? NormalizeToCRLF(UpdateNotes) : "(No release notes provided.)"
+    updateGui.SetFont("s9 Norm", "Consolas")
+    edNotes := updateGui.Add("Edit", "xm w440 r14 ReadOnly VScroll", notesText)
+
+    ; Buttons: Update now (default) + Later.
+    updateGui.SetFont("s10 Norm", "Segoe UI")
+    btnUpdate := updateGui.AddButton("xm w150 h32 Default", "&Update now")
+    btnUpdate.OnEvent("Click", (*) => UpdateNowFromDialog())
+    btnLater := updateGui.AddButton("x+10 yp w110 h32", "&Later")
+    btnLater.OnEvent("Click", (*) => CloseUpdateDialog())
+
+    ; Stash control refs on the Gui object (same pattern as the exit dialog).
+    updateGui.txtTitle  := txtTitle
+    updateGui.txtWhat   := txtWhat
+    updateGui.edNotes   := edNotes
+    updateGui.btnUpdate := btnUpdate
+    updateGui.btnLater  := btnLater
+
+    ApplyThemeToUpdateDialog()
+
+    updateGui.Show("AutoSize Center")
+
+    ; The read-only notes Edit grabs initial focus and auto-selects all its text
+    ; (a full blue highlight that survives close/reopen). Clear the selection (caret
+    ; to the top) and move focus to the default button, so the notes render clean
+    ; and Enter maps to "Update now".
+    try PostMessage(0x00B1, 0, 0, edNotes)   ; EM_SETSEL(0,0): deselect, caret to start
+    try btnUpdate.Focus()
+}
+
+ApplyThemeToUpdateDialog() {
+    global updateGui, themeState
+    if (!IsObject(updateGui))
+        return
+    pal := GetThemePalette(themeState)
+    try updateGui.BackColor := pal.bg
+    if (IsObject(updateGui.txtTitle))
+        try updateGui.txtTitle.Opt("c" pal.title)
+    if (IsObject(updateGui.txtWhat))
+        try updateGui.txtWhat.Opt("c" pal.text)
+
+    ; Notes box: theme its interior to match. In dark mode use the button-fill
+    ; shade for subtle contrast against the dialog background; light mode stays
+    ; white-on-black. (If a read-only Edit ignores the background on some Win10
+    ; builds, the text stays readable regardless -- verified in the dark smoke.)
+    if (IsObject(updateGui.edNotes)) {
+        editBg := (themeState = "dark") ? pal.buttonBg : "FFFFFF"
+        try updateGui.edNotes.Opt("Background" editBg " c" pal.text)
+    }
+
+    ; DWM dark title bar (attribute 20 = DWMWA_USE_IMMERSIVE_DARK_MODE).
+    val := (themeState = "dark") ? 1 : 0
+    try DllCall("dwmapi\DwmSetWindowAttribute"
+        , "Ptr",  updateGui.Hwnd
+        , "UInt", 20
+        , "Int*", val
+        , "UInt", 4)
+
+    ; uxtheme dark-mode private API: theme native controls (Edit border/scrollbar,
+    ; buttons) with DarkMode_Explorer in dark, Explorer in light.
+    ApplyDarkModeToGui(updateGui, themeState)
+}
+
+CloseUpdateDialog() {
+    global updateGui
+    if (IsObject(updateGui)) {
+        try updateGui.Destroy()
+    }
+    updateGui := 0
+}
+
+UpdateNowFromDialog() {
+    ; The actual Velopack apply path, unchanged from the old OnClickUpdateDot:
+    ; spawn the helper to download + apply + restart, then exit so OnExit fires
+    ; and Velopack swaps the install.
+    helperPath := A_ScriptDir "\updater-helper.exe"
+    if (!FileExist(helperPath)) {
+        MsgBox("Update helper missing at: " helperPath, "minimize-to-tray", "IconX")
+        return
+    }
+    Run(Format('"{1}" update', helperPath))
+    ExitApp()
 }
 
 ;==============================================================================

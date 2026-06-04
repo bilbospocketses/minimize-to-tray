@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.21] - 2026-06-04
+
+### Added
+- **Update notification dialog.** Clicking the pulsing blue update dot in the About dialog now opens a themed dialog showing the new version and its release notes (what changed), with **Update now** / **Later** buttons — instead of silently downloading and installing. The notes are the new release's `CHANGELOG.md` section, embedded into the Velopack package at build time and read back via Velopack's `NotesMarkdown`. Mirrors the update-notification pattern in the sibling tiny11options project. The dialog is light/dark themed like the About and exit dialogs.
+
+### Changed
+- **`build.ps1` now embeds release notes.** Before packing, it extracts the `## [<version>]` section from `CHANGELOG.md` and passes it to `vpk pack --releaseNotes`, so the in-app updater can show what an update contains. A release build now requires a matching CHANGELOG section — the build fails fast if it is absent.
+- **`updater-helper.exe check`** now prints the available version **and** its release notes (version on the first line, notes after), up from version-only. The `update` verb is unchanged.
+
 ## [1.0.20] - 2026-06-04
 
 ### Changed
@@ -126,7 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo hardened to CM-parity security baseline per the lockdown protocol: Dependabot alerts + automated security updates + secret scanning + push protection + Private Vulnerability Reporting all enabled. Actions allowlist active with `sha_pinning_required: true`. Squash-only merge policy. Branch ruleset on `main`: required signatures + linear history + PR-only changes + required status checks (`build-and-test` + `Scorecard analysis`). Tag ruleset on `refs/tags/v*`: required signatures + non-fast-forward + no deletion.
 - All workflow actions SHA-pinned to commit objects with precise `# vX.Y.Z` comments per the OpenSSF Scorecard imposter-commit verifier + Dependabot version-tracking lessons.
 
-[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.20...HEAD
+[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.21...HEAD
+[1.0.21]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.20...v1.0.21
 [1.0.20]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.19...v1.0.20
 [1.0.19]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.18...v1.0.19
 [1.0.18]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.18

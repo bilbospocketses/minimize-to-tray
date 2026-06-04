@@ -52,8 +52,11 @@ internal static class Program
             var info = await manager.CheckForUpdatesAsync();
             if (info is not null)
             {
-                // stdout: the new version string only. AHK script trims and compares to APP_VERSION.
+                // Contract with minimize-to-tray.ahk CheckForUpdateAsync:
+                //   line 1   = the new version (trimmed + compared to APP_VERSION)
+                //   line 2.. = the release notes (NotesMarkdown), shown raw in the update dialog
                 Console.WriteLine(info.TargetFullRelease.Version);
+                Console.WriteLine(info.TargetFullRelease.NotesMarkdown ?? "");
             }
             return 0;
         }
