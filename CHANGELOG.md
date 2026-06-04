@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.22] - 2026-06-04
+
+### Changed
+- **`updater-helper` assembly version synced to the release version.** The helper's `<Version>` had drifted (stuck at `1.0.6` while the app advanced); it now tracks the packaged release (`1.0.22`). Metadata-only — the installed version comes from `vpk pack --packVersion`, so the update mechanism is unaffected; this just keeps the helper exe's own version honest.
+
 ## [1.0.21] - 2026-06-04
 
 ### Added
@@ -135,7 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo hardened to CM-parity security baseline per the lockdown protocol: Dependabot alerts + automated security updates + secret scanning + push protection + Private Vulnerability Reporting all enabled. Actions allowlist active with `sha_pinning_required: true`. Squash-only merge policy. Branch ruleset on `main`: required signatures + linear history + PR-only changes + required status checks (`build-and-test` + `Scorecard analysis`). Tag ruleset on `refs/tags/v*`: required signatures + non-fast-forward + no deletion.
 - All workflow actions SHA-pinned to commit objects with precise `# vX.Y.Z` comments per the OpenSSF Scorecard imposter-commit verifier + Dependabot version-tracking lessons.
 
-[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.21...HEAD
+[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.22...HEAD
+[1.0.22]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.21...v1.0.22
 [1.0.21]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.20...v1.0.21
 [1.0.20]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.19...v1.0.20
 [1.0.19]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.18...v1.0.19
