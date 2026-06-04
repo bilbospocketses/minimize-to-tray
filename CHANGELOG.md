@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.20] - 2026-06-04
+
 ### Changed
+- **Velopack upgraded to 1.2.0.** Bumped both the `vpk` packaging CLI (`dotnet-tools.json`) and the `updater-helper` `Velopack` SDK reference from `1.0.1` to `1.2.0`, in lockstep. No change to the helper's update logic -- the six update APIs (`VelopackApp.Build().Run()` / `GithubSource` / `UpdateManager` / `CheckForUpdatesAsync` / `DownloadUpdatesAsync` / `ApplyUpdatesAndRestart`) are unchanged; Velopack 1.1.1 + 1.2.0 are Linux/macOS/MSI/robustness fixes that don't touch the Windows GitHub-releases update path.
 - **CI: pinned the GitHub-hosted Windows runner to `windows-2025`.** Both `ci.yml` (`build-and-test`) and `release.yml` (`build-and-release`) previously ran on `windows-latest`, which GitHub is migrating to Windows Server 2025 by 2026-06-15; pinning to the explicit label removes the moving target. The plain `windows-2025` image suffices -- the build installs .NET via `actions/setup-dotnet` and compiles AHK with the vendored Ahk2Exe -- so the `windows-2025-vs2026` variant is not needed.
 
 ## [1.0.19] - 2026-05-28
@@ -123,7 +126,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo hardened to CM-parity security baseline per the lockdown protocol: Dependabot alerts + automated security updates + secret scanning + push protection + Private Vulnerability Reporting all enabled. Actions allowlist active with `sha_pinning_required: true`. Squash-only merge policy. Branch ruleset on `main`: required signatures + linear history + PR-only changes + required status checks (`build-and-test` + `Scorecard analysis`). Tag ruleset on `refs/tags/v*`: required signatures + non-fast-forward + no deletion.
 - All workflow actions SHA-pinned to commit objects with precise `# vX.Y.Z` comments per the OpenSSF Scorecard imposter-commit verifier + Dependabot version-tracking lessons.
 
-[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.19...HEAD
+[Unreleased]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.20...HEAD
+[1.0.20]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.19...v1.0.20
 [1.0.19]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.18...v1.0.19
 [1.0.18]: https://github.com/bilbospocketses/minimize-to-tray/releases/tag/v1.0.18
 [1.0.17]: https://github.com/bilbospocketses/minimize-to-tray/compare/v1.0.16...v1.0.17
