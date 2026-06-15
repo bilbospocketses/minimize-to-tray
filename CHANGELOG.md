@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`build.ps1` now stamps the `updater-helper` assembly version from `$Version`** (`dotnet publish -p:Version=$Version`), so the helper's file/product version always tracks the packaged Velopack release automatically. Previously the version was set only by `UpdaterHelper.csproj` `<Version>` and bumped by hand — it had drifted (stuck at `1.0.6` until the v1.0.22 sync). The csproj `<Version>` is now a fallback for raw `dotnet build` / IDE builds.
+
 ## [1.0.22] - 2026-06-04
 
 ### Changed

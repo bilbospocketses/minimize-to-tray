@@ -117,7 +117,10 @@ if ($SkipHelper.IsPresent) {
 
     Push-Location $repoRoot
     try {
-        & dotnet publish $helperProj -c Release -o $helperOutDir --nologo 2>&1 | ForEach-Object {
+        # Stamp the helper assembly version from $Version so it always matches the
+        # packaged release (vpk --packVersion) with no manual csproj bump. Overrides
+        # the <Version> fallback in UpdaterHelper.csproj.
+        & dotnet publish $helperProj -c Release -o $helperOutDir -p:Version=$Version --nologo 2>&1 | ForEach-Object {
             if ($_ -match '^\s*$|^Microsoft \(R\)|^Copyright |^\s*Determining ') {} else { Write-Host "      $_" }
         }
         if ($LASTEXITCODE -ne 0) {

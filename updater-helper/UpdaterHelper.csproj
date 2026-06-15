@@ -17,6 +17,12 @@
 
     <AssemblyName>updater-helper</AssemblyName>
     <RootNamespace>MinimizeToTray.UpdaterHelper</RootNamespace>
+    <!--
+      Fallback version for raw `dotnet build` / IDE builds only. The release build
+      (build.ps1) passes -p:Version=$Version to override this, so the packaged
+      helper assembly version always tracks the Velopack release automatically,
+      with no manual per-release bump. Keep this as a sane default; need not be exact.
+    -->
     <Version>1.0.22</Version>
     <Authors>Jamie Chapman</Authors>
     <Product>minimize-to-tray updater-helper</Product>
