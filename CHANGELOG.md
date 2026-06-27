@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.24] - 2026-06-27
+
+### Changed
+- Release-pipeline bump to validate the in-tray update-available dot end-to-end: a 1.0.23 install detects 1.0.24 and surfaces the new blue tray dot. No functional changes from 1.0.23.
+
 ## [1.0.23] - 2026-06-27
 
 ### Added
