@@ -60,7 +60,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.22"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.23"       ; embedded version, kept in sync with vpk pack --packVersion
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global UpdateNotes      := ""            ; release notes for UpdateVersion, from updater-helper check
@@ -189,7 +189,7 @@ for arg in A_Args {
     }
 }
 
-; --- DIAGNOSTIC globals (tray-icon-loss investigation; temporary, strip after RCA) ---
+; --- Tray-icon-loss telemetry + self-heal globals ---
 DIAG_LOG_FILE := ""
 DiagAhkUid := 0
 DiagLastAhkPresent := -1
@@ -236,6 +236,18 @@ Initialize() {
     } else {
         appImagePath := A_ScriptDir "\assets\app.png"
     }
+
+    ; Badged tray icon (app icon + blue update dot), shown when an update is available.
+    global appUpdateIconPath
+    if (A_IsCompiled) {
+        appUpdateIconPath := A_Temp "\minimize-to-tray-app-update.ico"
+        if (!FileExist(appUpdateIconPath))
+            FileInstall("assets\app-update.ico", appUpdateIconPath, true)
+    } else {
+        appUpdateIconPath := A_ScriptDir "\assets\app-update.ico"
+    }
+    ; Apply the right tray icon now (covers /devshowdot forcing UpdateAvailable at startup).
+    SetTrayIconForUpdateState()
 
     ; Resolve app-data paths (rescue state + log). Falls back to A_AppData if
     ; LOCALAPPDATA is empty (rare but possible in stripped service-account profiles).
@@ -354,7 +366,7 @@ Initialize() {
         }
     }
 
-    ; --- DIAGNOSTIC (tray-icon-loss investigation; temporary, strip after RCA) ---
+    ; --- Tray-icon-loss telemetry + self-heal (see TRAY-ICON-LOSS section) ---
     DiagInit()
 }
 
@@ -659,10 +671,13 @@ ApplyThemeToAbout() {
 
     ; Swap the theme-icon glyph + color
     if (IsObject(aboutThemeIcon)) {
+        ; Icon shows the TARGET action (what a click switches TO), matching the
+        ; "Switch to <other> theme" tooltip. The sun keeps the control's gold base
+        ; color (dark's pal.themeGlyph is "" so it is not re-tinted); moon is color-locked.
         if (themeState = "dark") {
-            try aboutThemeIcon.Text := Chr(0x1F319)   ; crescent-moon emoji
+            try aboutThemeIcon.Text := Chr(0x2600)    ; sun = switch to light
         } else {
-            try aboutThemeIcon.Text := Chr(0x2600)    ; classic sun
+            try aboutThemeIcon.Text := Chr(0x1F319)   ; moon = switch to dark
         }
         if (pal.themeGlyph != "")
             try aboutThemeIcon.Opt("c" pal.themeGlyph)
@@ -789,7 +804,7 @@ ShowAbout(*) {
     ; Theme toggle (always present). Glyph + tint reflect current themeState;
     ; ApplyThemeToAbout (called at the end of ShowAbout) normalizes both, so the
     ; literal here just needs the right initial character.
-    initialGlyph := (themeState = "dark") ? Chr(0x1F319) : Chr(0x2600)
+    initialGlyph := (themeState = "dark") ? Chr(0x2600) : Chr(0x1F319)   ; sun in dark / moon in light = target action
     aboutGui.SetFont("s22 Bold cD9A300", "Segoe UI Symbol")
     aboutThemeIcon := aboutGui.Add("Text", Format("x{1} y{2} w{3} h36 Center", themeIconX, themeIconY, iconW), initialGlyph)
     aboutThemeIcon.OnEvent("Click", ToggleTheme)
@@ -999,6 +1014,7 @@ CheckForUpdateAsync() {
         UpdateVersion := "1.0.99-dev"
         UpdateNotes := DevSampleNotes()
         AddUpdateDotToAbout()
+        SetTrayIconForUpdateState()
         return
     }
 
@@ -1040,6 +1056,7 @@ CheckForUpdateAsync() {
         ; v1.0.5: if About is currently open, inject the dot live so the user
         ; sees it without having to close + reopen the dialog.
         AddUpdateDotToAbout()
+        SetTrayIconForUpdateState()
     }
 }
 
@@ -1662,43 +1679,56 @@ ShowGroupMenu(procName) {
 ; TaskbarCreated - explorer (re)created the notification area
 ;==============================================================================
 OnTaskbarCreated(wParam, lParam, msg, hwnd) {
-    global Groups
-
     DiagLog("TASKBARCREATED received")
+    ReassertTrayIcons("TaskbarCreated")
+}
 
-    ; Explorer destroyed all notification icons when it recreated the area.
-    ; AHK still thinks its icon is registered, so TraySetIcon alone calls
-    ; NIM_MODIFY on a nonexistent icon (silent failure). Toggle A_IconHidden
-    ; to force a full NIM_DELETE + NIM_ADD cycle.
-    A_IconHidden := true
-    A_IconHidden := false
-    if (A_IsCompiled)
-        TraySetIcon(A_ScriptFullPath)
-    else {
+; Set the tray icon to match the current update state: the blue-dot-badged icon
+; when an update is available, otherwise the normal app icon.
+SetTrayIconForUpdateState() {
+    global UpdateAvailable, appUpdateIconPath
+    if (UpdateAvailable && appUpdateIconPath != "" && FileExist(appUpdateIconPath)) {
+        try TraySetIcon(appUpdateIconPath)
+        return
+    }
+    if (A_IsCompiled) {
+        try TraySetIcon(A_ScriptFullPath)        ; embedded app icon
+    } else {
         iconPath := A_ScriptDir "\assets\app.ico"
         if (FileExist(iconPath))
-            TraySetIcon(iconPath)
+            try TraySetIcon(iconPath)
     }
+}
 
-    ; Re-register every per-group tray icon (windows currently minimized to tray).
+; Re-register all tray icons after the shell dropped them (explorer restart, or the
+; long-uptime AHK-icon loss the heartbeat self-heals). AHK still thinks its icon is
+; registered, so TraySetIcon alone would NIM_MODIFY a nonexistent icon (silent fail);
+; toggling A_IconHidden forces a full NIM_DELETE + NIM_ADD. SetTrayIconForUpdateState
+; then re-applies the correct (badged-or-not) icon so the update dot survives recovery.
+ReassertTrayIcons(reason) {
+    global Groups
+    A_IconHidden := true
+    A_IconHidden := false
+    SetTrayIconForUpdateState()
     for procName, group in Groups {
         ShellNotifyAdd(group.trayUid, group.hIcon, procName)
         UpdateGroupTooltip(procName)
     }
+    DiagLog("REASSERT (" reason ")")
 }
 
 ;==============================================================================
-; DIAGNOSTIC INSTRUMENTATION - tray-icon-loss investigation (TEMPORARY)
+; TRAY-ICON-LOSS TELEMETRY + SELF-HEAL
 ;------------------------------------------------------------------------------
-; Why: the always-on AHK built-in tray icon (A_ScriptHwnd / uID ~0x404) vanishes
-; after long uptime while the per-app manual icons (scriptGuiHwnd) survive, and an
-; explorer restart restores it (so OnTaskbarCreated works). Something external
-; drops only the AHK icon on an event that does NOT raise TaskbarCreated. This
-; block logs - read-only NIM_MODIFY presence probes (no flicker) + power/session/
-; display/TaskbarCreated event markers - to capture what coincides with the loss.
-; Observe-only: it does NOT auto-recover, so the trigger window stays visible.
-; Strip this whole section (+ the DiagInit() call + the DIAGNOSTIC globals + the
-; DiagLog line in OnTaskbarCreated) once the root cause is found.
+; The always-on AHK built-in tray icon (A_ScriptHwnd / uID ~0x404) can vanish
+; after long uptime while the per-app manual icons (scriptGuiHwnd) survive, and
+; only an explorer restart restored it - i.e. the shell drops the AHK icon on an
+; event that does NOT raise TaskbarCreated (the process runs elevated). It can't
+; be reproduced on demand, so this ships in the release: a 30 s heartbeat probes
+; the icon (read-only NIM_MODIFY, no flicker) and, on a present->absent transition,
+; logs the coinciding power/session/display event AND re-asserts the icon so it
+; self-heals. Surface the log once it fires to confirm the trigger; a targeted
+; root-cause fix can follow. Keep until the root cause is confirmed.
 ; Log: %LOCALAPPDATA%\bilbospocketses\minimize-to-tray\tray-diag.log
 ;==============================================================================
 DiagInit() {
@@ -1768,10 +1798,18 @@ DiagHeartbeat() {
             present += 1
     }
     DiagLog("HB ahkIcon=" (ahk = 1 ? "present" : (ahk = 0 ? "ABSENT" : "unknown")) " perApp=" present "/" total)
-    if (DiagLastAhkPresent = 1 && ahk = 0)
+
+    ; Self-heal: on a present->absent transition, log it (the POWER/SESSION/DISPLAY
+    ; markers just above name the trigger), re-assert so the icon returns without an
+    ; explorer restart, then re-probe to record whether recovery worked.
+    if (DiagLastAhkPresent = 1 && ahk = 0) {
         DiagLog("*** TRANSITION: AHK built-in tray icon LOST (present -> absent) ***")
-    else if (DiagLastAhkPresent = 0 && ahk = 1)
+        ReassertTrayIcons("heartbeat-recover")
+        ahk := DiagAhkUid ? (DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid) ? 1 : 0) : -1
+        DiagLog("  recover result: ahkIcon=" (ahk = 1 ? "present" : "STILL-ABSENT"))
+    } else if (DiagLastAhkPresent = 0 && ahk = 1) {
         DiagLog("--- AHK built-in tray icon RECOVERED (absent -> present) ---")
+    }
     if (ahk >= 0)
         DiagLastAhkPresent := ahk
 }
