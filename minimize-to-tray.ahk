@@ -60,7 +60,9 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.24"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.25"       ; embedded version, kept in sync with vpk pack --packVersion
+; Base tray tooltip; SetTrayIconForUpdateState swaps in an "update available" variant.
+global BASE_ICON_TIP := "minimize-to-tray`nWin+Shift+Z or`nMiddle-click title bar`nminimizes focused window to tray"
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
 global UpdateVersion    := ""            ; the new version string from the helper
 global UpdateNotes      := ""            ; release notes for UpdateVersion, from updater-helper check
@@ -261,11 +263,9 @@ Initialize() {
     RESCUE_LOG_FILE   := APP_DATA_DIR "\rescue.log"
     try DirCreate(APP_DATA_DIR)
 
-    ; Always-visible app tray icon tooltip
-    A_IconTip := "minimize-to-tray`n"
-              .  "Win+Shift+Z or`n"
-              .  "Middle-click title bar`n"
-              .  "minimizes focused window to tray"
+    ; Always-visible app tray icon tooltip (SetTrayIconForUpdateState swaps in an
+    ; "update available" variant once an update is found).
+    A_IconTip := BASE_ICON_TIP
 
     A_TrayMenu.Delete()
     A_TrayMenu.Add("&About", ShowAbout)
@@ -353,6 +353,9 @@ Initialize() {
     ; Schedule an asynchronous Velopack update check 5 seconds after start.
     ; Stub-only until updater-helper.exe is built and packaged with the app.
     SetTimer(CheckForUpdateAsync, -5000)
+    ; Background update watcher: re-check every 5 min so the tray update dot + tooltip
+    ; appear on their own, without an app restart or opening the About dialog.
+    SetTimer(CheckUpdatesPeriodically, 300000)
 
     ; First-run after a fresh install: the --veloapp-install hook set
     ; FirstRunPending. Pop About so the user sees the Run-on-login default
@@ -1002,6 +1005,12 @@ OnClickUpdateDot(*) {
 ;------------------------------------------------------------------------------
 ; Velopack update check (async, fire-and-forget)
 ;------------------------------------------------------------------------------
+; 5-min background watcher -> CheckForUpdateAsync. A thin wrapper so it gets its own
+; timer identity, separate from the one-shot startup check on CheckForUpdateAsync.
+CheckUpdatesPeriodically() {
+    CheckForUpdateAsync()
+}
+
 CheckForUpdateAsync() {
     global UpdateAvailable, UpdateVersion, UpdateNotes, A_IsCompiled, DevSimulateUpdate
 
@@ -1686,11 +1695,16 @@ OnTaskbarCreated(wParam, lParam, msg, hwnd) {
 ; Set the tray icon to match the current update state: the blue-dot-badged icon
 ; when an update is available, otherwise the normal app icon.
 SetTrayIconForUpdateState() {
-    global UpdateAvailable, appUpdateIconPath
+    global UpdateAvailable, appUpdateIconPath, BASE_ICON_TIP
     if (UpdateAvailable && appUpdateIconPath != "" && FileExist(appUpdateIconPath)) {
         try TraySetIcon(appUpdateIconPath)
+        ; Tooltip explains the blue dot.
+        try A_IconTip := "minimize-to-tray`n"
+                       . "** Update available - click the icon for details **`n"
+                       . "Win+Shift+Z or middle-click a title bar to minimize"
         return
     }
+    try A_IconTip := BASE_ICON_TIP
     if (A_IsCompiled) {
         try TraySetIcon(A_ScriptFullPath)        ; embedded app icon
     } else {
