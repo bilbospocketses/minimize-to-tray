@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.26] - 2026-06-27
+
+### Changed
+- Release-pipeline bump to validate the 5-minute background update watcher: a running 1.0.25 install detects 1.0.26 on its own (no About-open or restart) and surfaces the tray update dot + "update available" tooltip. No functional changes from 1.0.25.
+
 ## [1.0.25] - 2026-06-27
 
 ### Added

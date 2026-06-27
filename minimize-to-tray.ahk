@@ -60,7 +60,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.25"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.26"       ; embedded version, kept in sync with vpk pack --packVersion
 ; Base tray tooltip; SetTrayIconForUpdateState swaps in an "update available" variant.
 global BASE_ICON_TIP := "minimize-to-tray`nWin+Shift+Z or`nMiddle-click title bar`nminimizes focused window to tray"
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
