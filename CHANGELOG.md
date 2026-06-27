@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.25] - 2026-06-27
+
+### Added
+- **Background update watcher.** The app now re-checks for updates every 5 minutes, so the tray update dot (and the new tooltip below) appear on their own -- no app restart or opening the About dialog required.
+- **"Update available" tray tooltip.** When an update is available, hovering the tray icon shows an "Update available - click the icon for details" tooltip, so the blue dot is self-explanatory.
+
 ## [1.0.24] - 2026-06-27
 
 ### Changed
