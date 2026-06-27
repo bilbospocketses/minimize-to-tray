@@ -29,9 +29,9 @@ The AutoHotkey runtime is bundled into the executable either way — there's not
 
 ### Updates
 
-When a newer version is published to the [Releases page](https://github.com/bilbospocketses/minimize-to-tray/releases), the app's About dialog shows a pulsing blue dot to the left of the theme toggle in the top-right corner. Click the dot to open an **update dialog** showing the new version and its release notes (what changed) — then choose **Update now** to download and apply it in place (the app restarts on the new version automatically) or **Later** to dismiss.
+When a newer version is published to the [Releases page](https://github.com/bilbospocketses/minimize-to-tray/releases), the always-visible **tray icon gains a small blue dot** in its lower-right corner (and its hover tooltip notes the update), and the **About dialog** shows a matching pulsing blue dot to the left of the theme toggle. Click the dot in the About dialog to open an **update dialog** showing the new version and its release notes (what changed) — then choose **Update now** to download and apply it in place (the app restarts on the new version automatically) or **Later** to dismiss.
 
-The update check fires twice: ~5 seconds after each launch, and whenever you open the About dialog. While the check runs you may see a brief hourglass cursor. If a check happens to find an update while About is currently open, the dot pops in live — no need to close and reopen.
+The update check runs ~5 seconds after each launch, every 5 minutes in the background, and when you open the About dialog — so the dot appears on its own without opening anything. Once an update has been detected the app stops re-checking (opening About won't fire a redundant check). While a check runs you may see a brief hourglass cursor; if one finds an update while About is open, the dot pops in live.
 
 ## Usage
 
@@ -47,7 +47,7 @@ Windows of the same app collapse under a single tray icon (showing the app's own
 
 The app's own always-visible tray icon (separate from the per-app ones) has its own behaviors:
 
-- **Hover** → tooltip showing the triggers.
+- **Hover** → tooltip showing the triggers (plus an *Update available* note once a newer version has been detected).
 - **Single left-click** → opens **About**.
 - **Right-click** → menu with **About** / **Run on login** / **Run as Administrator** (toggles, checkmarks reflect current state) / **Exit**.
 
@@ -71,7 +71,7 @@ The About dialog contains:
 - **Run as Administrator** checkbox (mirrors the tray menu's toggle). When enabled, the app relaunches elevated and future logins start elevated automatically. When disabled, the app relaunches without elevation. Changes are applied on **OK**; closing with X or Escape discards. See [Troubleshooting](#minimizing-fails-on-certain-windows-elevation-mismatch) for when you'd want this.
 - Clickable GitHub URL.
 - **Light / Dark theme toggle** (☀ / 🌙 glyph) in the top-right corner. Click to flip — dialog body and OS title bar re-style live without reopen. Fresh installs default to your current Windows Apps theme.
-- Pulsing blue update dot to the left of the theme toggle when a newer version is available — click it to review what changed and choose whether to update.
+- Pulsing blue update dot to the left of the theme toggle when a newer version is available — click it to review what changed and choose whether to update. The same blue dot also appears on the always-visible tray icon.
 
 ## Known limitations
 
