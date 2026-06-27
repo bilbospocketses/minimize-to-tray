@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.23] - 2026-06-27
+
+### Added
+- **Update-available dot on the tray icon.** When an update is available, the system-tray icon shows a small blue dot in its lower-right corner (mirrors the existing About-dialog dot). Implemented as a pre-composited badged icon (`assets/app-update.ico`) swapped in via `TraySetIcon`; the badge is re-applied whenever the tray icons are re-asserted, so it survives icon recovery.
+- **Tray-icon-loss telemetry + self-heal.** Long sessions could lose the always-on tray icon while per-app icons survived and only an explorer restart restored it (the shell drops the AHK icon on an event that does not raise `TaskbarCreated`; the process runs elevated). A 30 s heartbeat now probes the icon's presence and, on a present→absent transition, logs the coinciding power/session/display event and re-asserts the icon so it self-heals — no explorer restart needed. Diagnostics go to `%LOCALAPPDATA%\bilbospocketses\minimize-to-tray\tray-diag.log`.
+
 ### Changed
+- **Theme toggle icon now indicates the action, not the current state.** In dark mode it shows a sun ("switch to light"); in light mode a moon ("switch to dark") — matching the existing "Switch to <theme> theme" hover tooltip. Previously it showed the current theme (moon in dark, sun in light), which read backwards against the tooltip.
 - **`build.ps1` now stamps the `updater-helper` assembly version from `$Version`** (`dotnet publish -p:Version=$Version`), so the helper's file/product version always tracks the packaged Velopack release automatically. Previously the version was set only by `UpdaterHelper.csproj` `<Version>` and bumped by hand — it had drifted (stuck at `1.0.6` until the v1.0.22 sync). The csproj `<Version>` is now a fallback for raw `dotnet build` / IDE builds.
 
 ## [1.0.22] - 2026-06-04
