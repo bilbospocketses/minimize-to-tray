@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.28] - 2026-06-27
+
+### Changed
+- Release-pipeline bump to validate the 1.0.27 update-check behavior: a running 1.0.27 install's 5-minute watcher surfaces the tray dot for 1.0.28, and opening About no longer fires a redundant update check. No functional changes from 1.0.27.
+
 ## [1.0.27] - 2026-06-27
 
 ### Changed
