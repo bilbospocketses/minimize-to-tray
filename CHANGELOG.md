@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.27] - 2026-06-27
+
+### Changed
+- **Don't re-check for updates once one is already detected.** Opening the About dialog no longer fires an update check when an update has already been found (e.g. by the 5-minute watcher), and the watcher itself stops making redundant network checks once the tray dot is showing. When no update is known yet, the About-open check still runs as before.
+
 ## [1.0.26] - 2026-06-27
 
 ### Changed
