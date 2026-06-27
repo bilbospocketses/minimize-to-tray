@@ -189,6 +189,11 @@ for arg in A_Args {
     }
 }
 
+; --- DIAGNOSTIC globals (tray-icon-loss investigation; temporary, strip after RCA) ---
+DIAG_LOG_FILE := ""
+DiagAhkUid := 0
+DiagLastAhkPresent := -1
+
 Initialize()
 
 Initialize() {
@@ -348,6 +353,9 @@ Initialize() {
             SetTimer(ShowAbout, -800)   ; ~800ms after init so the tray icon settles first
         }
     }
+
+    ; --- DIAGNOSTIC (tray-icon-loss investigation; temporary, strip after RCA) ---
+    DiagInit()
 }
 
 ;==============================================================================
@@ -1656,6 +1664,8 @@ ShowGroupMenu(procName) {
 OnTaskbarCreated(wParam, lParam, msg, hwnd) {
     global Groups
 
+    DiagLog("TASKBARCREATED received")
+
     ; Explorer destroyed all notification icons when it recreated the area.
     ; AHK still thinks its icon is registered, so TraySetIcon alone calls
     ; NIM_MODIFY on a nonexistent icon (silent failure). Toggle A_IconHidden
@@ -1675,6 +1685,109 @@ OnTaskbarCreated(wParam, lParam, msg, hwnd) {
         ShellNotifyAdd(group.trayUid, group.hIcon, procName)
         UpdateGroupTooltip(procName)
     }
+}
+
+;==============================================================================
+; DIAGNOSTIC INSTRUMENTATION - tray-icon-loss investigation (TEMPORARY)
+;------------------------------------------------------------------------------
+; Why: the always-on AHK built-in tray icon (A_ScriptHwnd / uID ~0x404) vanishes
+; after long uptime while the per-app manual icons (scriptGuiHwnd) survive, and an
+; explorer restart restores it (so OnTaskbarCreated works). Something external
+; drops only the AHK icon on an event that does NOT raise TaskbarCreated. This
+; block logs - read-only NIM_MODIFY presence probes (no flicker) + power/session/
+; display/TaskbarCreated event markers - to capture what coincides with the loss.
+; Observe-only: it does NOT auto-recover, so the trigger window stays visible.
+; Strip this whole section (+ the DiagInit() call + the DIAGNOSTIC globals + the
+; DiagLog line in OnTaskbarCreated) once the root cause is found.
+; Log: %LOCALAPPDATA%\bilbospocketses\minimize-to-tray\tray-diag.log
+;==============================================================================
+DiagInit() {
+    global APP_DATA_DIR, DIAG_LOG_FILE, scriptGuiHwnd, APP_VERSION
+    DIAG_LOG_FILE := APP_DATA_DIR "\tray-diag.log"
+
+    DiagLog("==== DiagInit ==== version=" APP_VERSION
+        . " compiled=" (A_IsCompiled ? 1 : 0)
+        . " admin=" (A_IsAdmin ? 1 : 0)
+        . " ahk=" A_AhkVersion
+        . " scriptHwnd=" Format("0x{:X}", A_ScriptHwnd)
+        . " stubGuiHwnd=" Format("0x{:X}", scriptGuiHwnd))
+
+    ; Power (WM_POWERBROADCAST 0x0218) + display (WM_DISPLAYCHANGE 0x007E) are
+    ; system broadcasts to top-level windows. Session (WM_WTSSESSION_CHANGE 0x02B1)
+    ; needs explicit registration to deliver lock/unlock/RDP.
+    OnMessage(0x0218, DiagOnPower)
+    OnMessage(0x007E, DiagOnDisplay)
+    OnMessage(0x02B1, DiagOnSession)
+    try DllCall("Wtsapi32\WTSRegisterSessionNotification", "Ptr", A_ScriptHwnd, "UInt", 0)  ; NOTIFY_FOR_THIS_SESSION
+
+    ; Discover the AHK icon uID while it is known-present, then start the heartbeat.
+    ; The -3s delay lets the tray icon settle (mirrors the ShowAbout -800 pattern).
+    SetTimer(DiagDiscoverAndStart, -3000)
+}
+
+DiagLog(msg) {
+    global DIAG_LOG_FILE
+    try FileAppend(FormatTime(A_Now, "yyyy-MM-dd HH:mm:ss") "  " msg "`n", DIAG_LOG_FILE, "UTF-8")
+}
+
+DiagProbeIconExists(hWnd, uid) {
+    ; Read-only existence probe: NIM_MODIFY with uFlags=0 returns nonzero iff the
+    ; (hWnd,uid) notify icon is currently registered with the shell. No visible change.
+    global NID_SIZE, NIM_MODIFY
+    nid := Buffer(NID_SIZE, 0)
+    NumPut("UInt", NID_SIZE, nid, 0)    ; cbSize
+    NumPut("Ptr",  hWnd,     nid, 8)    ; hWnd
+    NumPut("UInt", uid,      nid, 16)   ; uID
+    NumPut("UInt", 0,        nid, 20)   ; uFlags = 0 (probe only)
+    return DllCall("shell32\Shell_NotifyIconW", "UInt", NIM_MODIFY, "Ptr", nid.Ptr, "Int")
+}
+
+DiagDiscoverAndStart() {
+    global DiagAhkUid, DiagLastAhkPresent
+    DiagAhkUid := 0
+    for i, uid in [0x404, 0x405, 0x403, 0x406, 1] {
+        if (DiagProbeIconExists(A_ScriptHwnd, uid)) {
+            DiagAhkUid := uid
+            break
+        }
+    }
+    DiagLog("DISCOVER ahkUid=" (DiagAhkUid ? Format("0x{:X}", DiagAhkUid) : "NOT-FOUND"))
+    DiagLastAhkPresent := (DiagAhkUid && DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid)) ? 1 : 0
+    DiagHeartbeat()
+    SetTimer(DiagHeartbeat, 30000)   ; every 30s
+}
+
+DiagHeartbeat() {
+    global Groups, scriptGuiHwnd, DiagAhkUid, DiagLastAhkPresent
+    ahk := DiagAhkUid ? (DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid) ? 1 : 0) : -1
+    total := 0
+    present := 0
+    for procName, group in Groups {
+        total += 1
+        if (DiagProbeIconExists(scriptGuiHwnd, group.trayUid))
+            present += 1
+    }
+    DiagLog("HB ahkIcon=" (ahk = 1 ? "present" : (ahk = 0 ? "ABSENT" : "unknown")) " perApp=" present "/" total)
+    if (DiagLastAhkPresent = 1 && ahk = 0)
+        DiagLog("*** TRANSITION: AHK built-in tray icon LOST (present -> absent) ***")
+    else if (DiagLastAhkPresent = 0 && ahk = 1)
+        DiagLog("--- AHK built-in tray icon RECOVERED (absent -> present) ---")
+    if (ahk >= 0)
+        DiagLastAhkPresent := ahk
+}
+
+DiagOnPower(wParam, lParam, msg, hwnd) {
+    static names := Map(0x4,"APMSUSPEND", 0x7,"APMRESUMESUSPEND", 0xA,"APMRESUMECRITICAL", 0x12,"APMRESUMEAUTOMATIC", 0x9,"APMPOWERSTATUSCHANGE")
+    DiagLog("POWER " (names.Has(wParam) ? names[wParam] : Format("0x{:X}", wParam)))
+}
+
+DiagOnDisplay(wParam, lParam, msg, hwnd) {
+    DiagLog("DISPLAYCHANGE bpp=" wParam " " (lParam & 0xFFFF) "x" ((lParam >> 16) & 0xFFFF))
+}
+
+DiagOnSession(wParam, lParam, msg, hwnd) {
+    static names := Map(0x1,"CONSOLE_CONNECT", 0x2,"CONSOLE_DISCONNECT", 0x3,"REMOTE_CONNECT", 0x4,"REMOTE_DISCONNECT", 0x5,"SESSION_LOGON", 0x6,"SESSION_LOGOFF", 0x7,"SESSION_LOCK", 0x8,"SESSION_UNLOCK", 0x9,"SESSION_REMOTE_CONTROL")
+    DiagLog("SESSION " (names.Has(wParam) ? names[wParam] : Format("0x{:X}", wParam)))
 }
 
 ;==============================================================================
