@@ -60,7 +60,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.26"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.27"       ; embedded version, kept in sync with vpk pack --packVersion
 ; Base tray tooltip; SetTrayIconForUpdateState swaps in an "update available" variant.
 global BASE_ICON_TIP := "minimize-to-tray`nWin+Shift+Z or`nMiddle-click title bar`nminimizes focused window to tray"
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
@@ -1013,6 +1013,12 @@ CheckUpdatesPeriodically() {
 
 CheckForUpdateAsync() {
     global UpdateAvailable, UpdateVersion, UpdateNotes, A_IsCompiled, DevSimulateUpdate
+
+    ; Once an update is already known, skip re-checking: opening About no longer
+    ; re-runs a check, and the 5-min watcher stops making redundant network calls
+    ; (the tray dot + tooltip are already showing).
+    if (UpdateAvailable)
+        return
 
     ; Dev short-circuit: /devsimulateupdate flag bypasses the helper entirely and
     ; flips UpdateAvailable + seeds sample notes + AddUpdateDotToAbout. Smoke test
