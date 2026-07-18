@@ -60,7 +60,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.28"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.29"       ; embedded version, kept in sync with vpk pack --packVersion
 ; Base tray tooltip; SetTrayIconForUpdateState swaps in an "update available" variant.
 global BASE_ICON_TIP := "minimize-to-tray`nWin+Shift+Z or`nMiddle-click title bar`nminimizes focused window to tray"
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
@@ -193,8 +193,15 @@ for arg in A_Args {
 
 ; --- Tray-icon-loss telemetry + self-heal globals ---
 DIAG_LOG_FILE := ""
-DiagAhkUid := 0
-DiagLastAhkPresent := -1
+; AHK v2 built-in tray icon uID on A_ScriptHwnd. Fixed (not discovered): proven to be
+; 0x404 for the pinned v2.0.26 runtime via an isolated probe. Kept in a var (not a raw
+; literal) only so the startup check can adopt a different uID if a future AHK runtime
+; ever moves it - see DiagDiscoverAndStart.
+DiagAhkUid := 0x404
+DiagLastAhkPresent := -1   ; -1 = unknown (pre-first-probe), 1 = present, 0 = absent
+DiagHbCount := 0           ; heartbeat tick counter, for periodic self-heal retry
+DiagPendingRecoverReason := ""   ; trigger label for the debounced proactive re-assert
+MsgFilterAllowed := ""           ; TaskbarCreated UIPI-filter result (logged by DiagInit)
 
 Initialize()
 
@@ -217,6 +224,19 @@ Initialize() {
     WM_TASKBARCREATED := DllCall("RegisterWindowMessageW", "Str", "TaskbarCreated", "UInt")
     if (WM_TASKBARCREATED)
         OnMessage(WM_TASKBARCREATED, OnTaskbarCreated)
+
+    ; This process runs elevated (to hide/relaunch higher-integrity windows). UIPI would
+    ; otherwise DROP the shell's TaskbarCreated re-add broadcast (medium-IL explorer -> our
+    ; high-IL process) before OnTaskbarCreated could re-register the tray icons - the prime
+    ; suspect for the built-in icon vanishing on a notification-area rebuild and never
+    ; coming back. Explicitly allow that one message through the filter on both our
+    ; top-level windows. Result is stashed for DiagInit to log (the diag log isn't open yet).
+    global MsgFilterAllowed
+    if (WM_TASKBARCREATED) {
+        okMain := DllCall("user32\ChangeWindowMessageFilterEx", "Ptr", A_ScriptHwnd, "UInt", WM_TASKBARCREATED, "UInt", 1, "Ptr", 0, "Int")  ; MSGFLT_ALLOW
+        okStub := DllCall("user32\ChangeWindowMessageFilterEx", "Ptr", scriptGuiHwnd, "UInt", WM_TASKBARCREATED, "UInt", 1, "Ptr", 0, "Int")
+        MsgFilterAllowed := "main=" (okMain ? 1 : 0) " stub=" (okStub ? 1 : 0)
+    }
 
     ; Custom app tray icon. When running as compiled .exe, the embedded icon
     ; (set via Ahk2Exe /icon during compile) is already used by default.
@@ -1745,14 +1765,18 @@ ReassertTrayIcons(reason) {
 ; only an explorer restart restored it - i.e. the shell drops the AHK icon on an
 ; event that does NOT raise TaskbarCreated (the process runs elevated). It can't
 ; be reproduced on demand, so this ships in the release: a 30 s heartbeat probes
-; the icon (read-only NIM_MODIFY, no flicker) and, on a present->absent transition,
-; logs the coinciding power/session/display event AND re-asserts the icon so it
-; self-heals. Surface the log once it fires to confirm the trigger; a targeted
-; root-cause fix can follow. Keep until the root cause is confirmed.
+; the icon (read-only NIM_MODIFY, no flicker) and, whenever the icon is absent -
+; whether it vanished mid-session OR was already gone when we first looked (absent at
+; startup) - logs the coinciding power/session/display event AND re-asserts the icon so
+; it self-heals. (The uID is fixed at 0x404, not discovered, so an icon missing at
+; startup is reported as ABSENT, never as an un-actionable "unknown".) Surface the log
+; once it fires to confirm the trigger. The permanent fix (DiagScheduleRecover +
+; ChangeWindowMessageFilterEx) re-registers the icon proactively on those same events
+; so it never stays gone; this telemetry remains to confirm it and catch residuals.
 ; Log: %LOCALAPPDATA%\bilbospocketses\minimize-to-tray\tray-diag.log
 ;==============================================================================
 DiagInit() {
-    global APP_DATA_DIR, DIAG_LOG_FILE, scriptGuiHwnd, APP_VERSION
+    global APP_DATA_DIR, DIAG_LOG_FILE, scriptGuiHwnd, APP_VERSION, MsgFilterAllowed
     DIAG_LOG_FILE := APP_DATA_DIR "\tray-diag.log"
 
     DiagLog("==== DiagInit ==== version=" APP_VERSION
@@ -1761,17 +1785,19 @@ DiagInit() {
         . " ahk=" A_AhkVersion
         . " scriptHwnd=" Format("0x{:X}", A_ScriptHwnd)
         . " stubGuiHwnd=" Format("0x{:X}", scriptGuiHwnd))
+    DiagLog("MSGFILTER TaskbarCreated allowed: " (MsgFilterAllowed != "" ? MsgFilterAllowed : "n/a"))
 
     ; Power (WM_POWERBROADCAST 0x0218) + display (WM_DISPLAYCHANGE 0x007E) are
     ; system broadcasts to top-level windows. Session (WM_WTSSESSION_CHANGE 0x02B1)
-    ; needs explicit registration to deliver lock/unlock/RDP.
+    ; needs explicit registration to deliver lock/unlock/RDP. All three also drive the
+    ; proactive re-registration (DiagScheduleRecover) in their handlers below.
     OnMessage(0x0218, DiagOnPower)
     OnMessage(0x007E, DiagOnDisplay)
     OnMessage(0x02B1, DiagOnSession)
     try DllCall("Wtsapi32\WTSRegisterSessionNotification", "Ptr", A_ScriptHwnd, "UInt", 0)  ; NOTIFY_FOR_THIS_SESSION
 
-    ; Discover the AHK icon uID while it is known-present, then start the heartbeat.
-    ; The -3s delay lets the tray icon settle (mirrors the ShowAbout -800 pattern).
+    ; Confirm the tray icon's uID and start the heartbeat. The -3s delay lets the tray
+    ; icon settle at startup (mirrors the ShowAbout -800 pattern).
     SetTimer(DiagDiscoverAndStart, -3000)
 }
 
@@ -1794,22 +1820,41 @@ DiagProbeIconExists(hWnd, uid) {
 
 DiagDiscoverAndStart() {
     global DiagAhkUid, DiagLastAhkPresent
-    DiagAhkUid := 0
-    for i, uid in [0x404, 0x405, 0x403, 0x406, 1] {
-        if (DiagProbeIconExists(A_ScriptHwnd, uid)) {
-            DiagAhkUid := uid
-            break
+    ; The built-in icon's uID is fixed at 0x404 (proven for the pinned AHK v2.0.26).
+    ; We do NOT "discover or give up": if 0x404 is absent at startup but some other uID
+    ; on A_ScriptHwnd is present, a future AHK moved it -> adopt + warn. But a genuinely
+    ; absent icon (no uID present at all - the exact bug we hunt) must NOT disable
+    ; detection: we keep 0x404 and let the heartbeat report ABSENT and self-heal. This
+    ; is the fix for the old one-shot discovery that logged NOT-FOUND -> "unknown"
+    ; forever and could never see an icon already missing when it first looked.
+    if (!DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid)) {
+        for i, uid in [0x405, 0x403, 0x406, 0x407, 0x402, 0x401, 1] {
+            if (DiagProbeIconExists(A_ScriptHwnd, uid)) {
+                DiagLog("DISCOVER WARNING: 0x404 absent, adopting present uID " Format("0x{:X}", uid) " (AHK runtime changed the tray uID?)")
+                DiagAhkUid := uid
+                break
+            }
         }
     }
-    DiagLog("DISCOVER ahkUid=" (DiagAhkUid ? Format("0x{:X}", DiagAhkUid) : "NOT-FOUND"))
-    DiagLastAhkPresent := (DiagAhkUid && DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid)) ? 1 : 0
+    startup := DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid) ? "present" : "ABSENT"
+    DiagLog("DISCOVER ahkUid=" Format("0x{:X}", DiagAhkUid) " startupState=" startup)
+    DiagLastAhkPresent := -1   ; force the first heartbeat to treat absence as an episode start
     DiagHeartbeat()
     SetTimer(DiagHeartbeat, 30000)   ; every 30s
+    ; Startup-race coverage: the icon can be dropped during the first seconds (display
+    ; settle at logon/unlock) with no TaskbarCreated to re-add it. Probe-and-recover a
+    ; couple of times early, on top of the 30s heartbeat. Probe-gated, so no-op if fine.
+    SetTimer(() => DiagRecoverIfAbsent("startup-settle-5s"), -5000)
+    SetTimer(() => DiagRecoverIfAbsent("startup-settle-12s"), -12000)
 }
 
 DiagHeartbeat() {
-    global Groups, scriptGuiHwnd, DiagAhkUid, DiagLastAhkPresent
-    ahk := DiagAhkUid ? (DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid) ? 1 : 0) : -1
+    global Groups, scriptGuiHwnd, DiagAhkUid, DiagLastAhkPresent, DiagHbCount
+    Critical    ; don't let the proactive-recover timer interrupt a reassert mid-flight
+    DiagHbCount += 1
+    ; uID is fixed, so this is a definite present(1)/absent(0) - never "unknown". That is
+    ; what lets us catch an icon already gone at startup (DiagLastAhkPresent = -1).
+    ahk := DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid) ? 1 : 0
     total := 0
     present := 0
     for procName, group in Groups {
@@ -1817,35 +1862,87 @@ DiagHeartbeat() {
         if (DiagProbeIconExists(scriptGuiHwnd, group.trayUid))
             present += 1
     }
-    DiagLog("HB ahkIcon=" (ahk = 1 ? "present" : (ahk = 0 ? "ABSENT" : "unknown")) " perApp=" present "/" total)
+    DiagLog("HB ahkIcon=" (ahk ? "present" : "ABSENT") " perApp=" present "/" total)
 
-    ; Self-heal: on a present->absent transition, log it (the POWER/SESSION/DISPLAY
-    ; markers just above name the trigger), re-assert so the icon returns without an
-    ; explorer restart, then re-probe to record whether recovery worked.
-    if (DiagLastAhkPresent = 1 && ahk = 0) {
-        DiagLog("*** TRANSITION: AHK built-in tray icon LOST (present -> absent) ***")
+    if (ahk = 0 && DiagLastAhkPresent != 0) {
+        ; Entered an absence episode - either a mid-session loss (was present) or the
+        ; icon was already absent on our first probe (absent at startup). Both are real
+        ; and both are alerted. The POWER/SESSION/DISPLAY lines just above name the
+        ; coinciding trigger. Re-assert to self-heal, then re-probe to record the result.
+        if (DiagLastAhkPresent = 1)
+            DiagLog("*** TRANSITION: AHK built-in tray icon LOST (present -> absent) ***")
+        else
+            DiagLog("*** ABSENT AT STARTUP: AHK built-in tray icon not registered ***")
         ReassertTrayIcons("heartbeat-recover")
-        ahk := DiagAhkUid ? (DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid) ? 1 : 0) : -1
+        ahk := DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid) ? 1 : 0
         DiagLog("  recover result: ahkIcon=" (ahk = 1 ? "present" : "STILL-ABSENT"))
-    } else if (DiagLastAhkPresent = 0 && ahk = 1) {
+    } else if (ahk = 0 && DiagLastAhkPresent = 0) {
+        ; Persistent absence: the episode was already logged + alerted. Retry the
+        ; self-heal quietly every 10th tick (~5 min); the "absent" token here is one the
+        ; email scanner does NOT match, so an ongoing outage nags once, not every 30s.
+        if (Mod(DiagHbCount, 10) = 0) {
+            ReassertTrayIcons("heartbeat-retry")
+            ahk := DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid) ? 1 : 0
+            if (ahk = 1)
+                DiagLog("--- AHK built-in tray icon RECOVERED (retry) ---")
+            else
+                DiagLog("  retry result: ahkIcon=absent")
+        }
+    } else if (ahk = 1 && DiagLastAhkPresent = 0) {
         DiagLog("--- AHK built-in tray icon RECOVERED (absent -> present) ---")
     }
-    if (ahk >= 0)
-        DiagLastAhkPresent := ahk
+    DiagLastAhkPresent := ahk
+}
+
+; --- Proactive icon recovery (event-driven) --------------------------------------
+; The shell can drop the built-in tray icon on a notification-area rebuild (display
+; change, session unlock/RDP, resume) WITHOUT raising TaskbarCreated, so nothing re-adds
+; it and the heartbeat only catches it up to 30s later. The display/power/session
+; handlers react to the very events that coincide with the loss and re-register
+; immediately. Probe-gated so there is no NIM_DELETE/ADD flicker when the icon is fine,
+; and debounced so a burst of events (a multi-monitor resolution dance) collapses to one.
+DiagScheduleRecover(reason) {
+    global DiagPendingRecoverReason
+    DiagPendingRecoverReason := reason
+    SetTimer(DiagRecoverProbe, -1500)   ; single-shot; repeated calls reset the countdown
+}
+
+DiagRecoverProbe() {
+    global DiagPendingRecoverReason
+    DiagRecoverIfAbsent(DiagPendingRecoverReason)
+}
+
+DiagRecoverIfAbsent(reason) {
+    global DiagAhkUid
+    Critical    ; atomic w.r.t. the heartbeat's own reassert
+    if (DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid))
+        return                       ; icon is fine - nothing to do, no flicker
+    DiagLog("PROACTIVE-RECOVER (" reason "): icon absent, re-asserting")
+    ReassertTrayIcons(reason)
+    ok := DiagProbeIconExists(A_ScriptHwnd, DiagAhkUid) ? 1 : 0
+    ; Deliberately does NOT touch DiagLastAhkPresent: if this recovers the icon before the
+    ; heartbeat notices, no false alert fires; if it fails, the heartbeat still sees the
+    ; absence as a fresh episode and emails. "absent" here is a token the scanner ignores.
+    DiagLog("  proactive result: ahkIcon=" (ok ? "present" : "absent"))
 }
 
 DiagOnPower(wParam, lParam, msg, hwnd) {
     static names := Map(0x4,"APMSUSPEND", 0x7,"APMRESUMESUSPEND", 0xA,"APMRESUMECRITICAL", 0x12,"APMRESUMEAUTOMATIC", 0x9,"APMPOWERSTATUSCHANGE")
-    DiagLog("POWER " (names.Has(wParam) ? names[wParam] : Format("0x{:X}", wParam)))
+    ev := names.Has(wParam) ? names[wParam] : Format("0x{:X}", wParam)
+    DiagLog("POWER " ev)
+    DiagScheduleRecover("power-" ev)
 }
 
 DiagOnDisplay(wParam, lParam, msg, hwnd) {
     DiagLog("DISPLAYCHANGE bpp=" wParam " " (lParam & 0xFFFF) "x" ((lParam >> 16) & 0xFFFF))
+    DiagScheduleRecover("displaychange")
 }
 
 DiagOnSession(wParam, lParam, msg, hwnd) {
     static names := Map(0x1,"CONSOLE_CONNECT", 0x2,"CONSOLE_DISCONNECT", 0x3,"REMOTE_CONNECT", 0x4,"REMOTE_DISCONNECT", 0x5,"SESSION_LOGON", 0x6,"SESSION_LOGOFF", 0x7,"SESSION_LOCK", 0x8,"SESSION_UNLOCK", 0x9,"SESSION_REMOTE_CONTROL")
-    DiagLog("SESSION " (names.Has(wParam) ? names[wParam] : Format("0x{:X}", wParam)))
+    ev := names.Has(wParam) ? names[wParam] : Format("0x{:X}", wParam)
+    DiagLog("SESSION " ev)
+    DiagScheduleRecover("session-" ev)
 }
 
 ;==============================================================================

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.29] - 2026-07-18
+
+### Fixed
+- **Tray-icon-loss detection now catches an icon that is already missing at startup.** The heartbeat previously discovered the built-in tray icon's ID just once, ~3 s after launch, and assumed it was present then; if the icon wasn't registered at that instant it logged `NOT-FOUND` and reported `ahkIcon=unknown` for the rest of the session. Because the loss alert and self-heal only fired on a present→absent *transition*, an icon that failed to appear at startup was never detected, never self-healed, and never alerted — the exact failure the telemetry exists to catch. The ID is now fixed at its known value (`0x404`) and probed every heartbeat, so a missing icon reads as `ABSENT` whether it vanished mid-session or was gone before the first probe, and is self-healed + logged either way. Persistent outages retry the self-heal about every 5 min and alert once per episode rather than every 30 s.
+- **Tray icon now re-registers itself the moment the shell drops it, instead of only within 30 s.** The built-in tray icon was registered once at startup and never re-added, so when the notification area was rebuilt (a display change, session unlock/RDP, resume, or a logon race) the shell silently dropped it and — because the app runs elevated — the shell's `TaskbarCreated` re-add broadcast was filtered out by UIPI before the handler could react. The app now (a) allows `TaskbarCreated` through the UIPI message filter via `ChangeWindowMessageFilterEx`, and (b) proactively probes-and-re-registers the icon on the display/power/session events that coincide with the loss (and a couple of times during the first seconds after launch). Recovery is now effectively instant and flicker-free, so an elevated user should no longer see the tray icon go missing.
+
 ## [1.0.28] - 2026-06-27
 
 ### Changed
