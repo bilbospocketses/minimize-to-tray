@@ -70,7 +70,7 @@ The About dialog contains:
 - **Run on login** checkbox (mirrors the tray menu's toggle). Managed via a Windows Scheduled Task.
 - **Run as Administrator** checkbox (mirrors the tray menu's toggle). When enabled, the app relaunches elevated and future logins start elevated automatically. When disabled, the app relaunches without elevation. Changes are applied on **OK**; closing with X or Escape discards. See [Troubleshooting](#minimizing-fails-on-certain-windows-elevation-mismatch) for when you'd want this.
 - Clickable GitHub URL.
-- **Light / Dark theme toggle** (☀ / 🌙 glyph) in the top-right corner. Click to flip — dialog body and OS title bar re-style live without reopen. Fresh installs default to your current Windows Apps theme.
+- **Light / Dark theme toggle** — a pill in the top-right corner showing ☀ and ☾ side by side; the active mode's glyph is in color, the other greyed out. Click a glyph to pick that mode, or the pill background to flip — dialog body and OS title bar re-style live without reopen. Fresh installs default to your current Windows Apps theme.
 - Pulsing blue update dot to the left of the theme toggle when a newer version is available — click it to review what changed and choose whether to update. The same blue dot also appears on the always-visible tray icon.
 
 ## Known limitations
