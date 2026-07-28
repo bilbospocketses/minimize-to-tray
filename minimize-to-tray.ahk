@@ -60,7 +60,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.29"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.30"       ; embedded version, kept in sync with vpk pack --packVersion
 ; Base tray tooltip; SetTrayIconForUpdateState swaps in an "update available" variant.
 global BASE_ICON_TIP := "minimize-to-tray`nWin+Shift+Z or`nMiddle-click title bar`nminimizes focused window to tray"
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
@@ -96,7 +96,9 @@ global SCHED_TASK_NAME := "minimize-to-tray"
 ; Light/Dark theme state. Same source-of-truth pattern as Run-on-login: in-process
 ; global seeded from registry at init, mirrored to registry on toggle when compiled.
 global themeState        := "light"     ; "light" | "dark"; seeded in Initialize()
-global aboutThemeIcon    := 0           ; About-dialog theme-toggle Text handle (or 0 when closed)
+global aboutThemePill    := 0           ; About-dialog theme-toggle pill background (or 0 when closed)
+global aboutThemeSun     := 0           ; sun glyph cell inside the pill (or 0 when closed)
+global aboutThemeMoon    := 0           ; moon glyph cell inside the pill (or 0 when closed)
 global aboutControlRefs  := ""          ; Map(role -> Gui.Control) populated in ShowAbout
 
 ; App-scoped registry key. Values stored here:
@@ -632,7 +634,10 @@ GetThemePalette(name) {
             checkbox:     "F2F2F2",
             checkbox2:    "F2F2F2",
             okButton:     "F2F2F2",
-            themeGlyph:   "",          ; emoji moon is color-locked; tint is ignored
+            toggleSunOn:  "D9A300",    ; gold sun when light is the active mode (unused here)
+            toggleMoonOn: "9CC2FF",    ; moonlight blue when dark is the active mode
+            toggleOff:    "6A6A6A",    ; greyed-out inactive glyph
+            togglePillBg: "2D2D2D",    ; pill fill (matches buttonBg)
             text:         "F2F2F2",    ; v1.0.7: rescue dialog body text
             buttonBg:     "2D2D2D",    ; v1.0.7: owner-drawn button fill (normal)
             buttonFg:     "F2F2F2",    ; v1.0.7: owner-drawn button text
@@ -656,7 +661,10 @@ GetThemePalette(name) {
         checkbox:     "000000",
         checkbox2:    "000000",
         okButton:     "000000",
-        themeGlyph:   "D9A300",        ; gold sun
+        toggleSunOn:  "D9A300",        ; gold sun when light is the active mode
+        toggleMoonOn: "9CC2FF",        ; moonlight blue when dark is the active mode (unused here)
+        toggleOff:    "B0B0B0",        ; greyed-out inactive glyph
+        togglePillBg: "EFEFEF",        ; pill fill (subtle grey on the white dialog)
         text:         "000000",
         buttonBg:     "FDFDFD",
         buttonFg:     "000000",
@@ -673,7 +681,7 @@ GetThemePalette(name) {
 
 ApplyThemeToAbout() {
     ; Live re-style of the About dialog. No-op when the dialog isn't open.
-    global aboutGui, aboutControlRefs, aboutThemeIcon, themeState
+    global aboutGui, aboutControlRefs, aboutThemePill, aboutThemeSun, aboutThemeMoon, themeState
     if (!aboutGui || !IsObject(aboutGui))
         return
 
@@ -692,19 +700,22 @@ ApplyThemeToAbout() {
         }
     }
 
-    ; Swap the theme-icon glyph + color
-    if (IsObject(aboutThemeIcon)) {
-        ; Icon shows the TARGET action (what a click switches TO), matching the
-        ; "Switch to <other> theme" tooltip. The sun keeps the control's gold base
-        ; color (dark's pal.themeGlyph is "" so it is not re-tinted); moon is color-locked.
-        if (themeState = "dark") {
-            try aboutThemeIcon.Text := Chr(0x2600)    ; sun = switch to light
-        } else {
-            try aboutThemeIcon.Text := Chr(0x1F319)   ; moon = switch to dark
-        }
-        if (pal.themeGlyph != "")
-            try aboutThemeIcon.Opt("c" pal.themeGlyph)
-        try aboutThemeIcon.Redraw()
+    ; Tint the theme-toggle pill. Both glyphs are always visible; the ACTIVE
+    ; mode's glyph is colored (gold sun / moonlight moon) and the inactive one
+    ; is greyed out. Glyph characters never change - only tints + pill fill.
+    if (IsObject(aboutThemePill)) {
+        try aboutThemePill.Opt("Background" pal.togglePillBg)
+        try aboutThemePill.Redraw()
+    }
+    if (IsObject(aboutThemeSun)) {
+        sunColor := (themeState = "light") ? pal.toggleSunOn : pal.toggleOff
+        try aboutThemeSun.Opt("c" sunColor " Background" pal.togglePillBg)
+        try aboutThemeSun.Redraw()
+    }
+    if (IsObject(aboutThemeMoon)) {
+        moonColor := (themeState = "dark") ? pal.toggleMoonOn : pal.toggleOff
+        try aboutThemeMoon.Opt("c" moonColor " Background" pal.togglePillBg)
+        try aboutThemeMoon.Redraw()
     }
 
     ; Tell DWM to draw the OS title bar in the matching theme. Without this the
@@ -743,6 +754,14 @@ ToggleTheme(*) {
     ApplyThemeToAbout()
 }
 
+SetTheme(target, *) {
+    ; Segmented-control semantics for the pill's per-glyph clicks: clicking the
+    ; already-active mode is a no-op; clicking the inactive one switches to it.
+    global themeState
+    if (themeState != target)
+        ToggleTheme()
+}
+
 ;==============================================================================
 ; About menu - custom Gui with pulsing blue update-available dot
 ;==============================================================================
@@ -754,7 +773,7 @@ global updateGui   := 0   ; the update-notification modal Gui (or 0 when closed)
 
 ShowAbout(*) {
     global aboutGui, aboutDot, pulseTimer, APP_VERSION, UpdateAvailable, UpdateVersion
-    global aboutThemeIcon, aboutControlRefs, themeState
+    global aboutThemePill, aboutThemeSun, aboutThemeMoon, aboutControlRefs, themeState
     aboutControlRefs := Map()
 
     ; If a previous About is still showing, just bring it forward.
@@ -805,18 +824,24 @@ ShowAbout(*) {
     aboutControlRefs["version"] := aboutGui.Add("Text", Format("x{1} y+4 w{2} Center", textStartX, textBlockW), "v" APP_VERSION)
 
     ; Top-right corner controls. Layout (left -> right):
-    ;   [optional update dot]  [theme toggle]
-    ; The theme toggle is ALWAYS present. The update dot is only created when
-    ; an update is available, and slides 44px to the left of the theme icon.
-    iconW       := 32
-    rightEdge   := 28 + contentW
-    themeIconX  := rightEdge - iconW + 20    ; same x as the old top-right dot
-    themeIconY  := 4
+    ;   [optional update dot]  [theme-toggle pill]
+    ; The pill is ALWAYS present: sun + moon glyphs side by side in a rounded
+    ; "pill" box; the ACTIVE mode's glyph is colored, the other greyed out
+    ; (tints applied by ApplyThemeToAbout). The update dot is only created when
+    ; an update is available, and sits 12px to the left of the pill.
+    iconW    := 32                           ; update-dot cell width (unchanged)
+    rightEdge := 28 + contentW
+    pillW    := 60                           ; 7 pad + 22 sun + 2 gap + 22 moon + 7 pad
+    pillH    := 28
+    cellW    := 22
+    cellH    := 24
+    pillX    := rightEdge + 20 - pillW       ; keep the old cluster's right edge
+    pillY    := 8                            ; centers on y22, matching the dot's h36 at y4
 
     ; Update dot first (if applicable), so the visual left-to-right order matches.
     if (UpdateAvailable) {
-        dotX := themeIconX - iconW - 12      ; 12px gap to the left of theme icon
-        dotY := themeIconY
+        dotX := pillX - iconW - 12           ; 12px gap to the left of the pill
+        dotY := 4
         aboutGui.SetFont("s22 Bold cBlue", "Segoe UI Symbol")
         aboutDot := aboutGui.Add("Text", Format("x{1} y{2} w{3} h36 Center", dotX, dotY, iconW), Chr(9679))
         aboutDot.OnEvent("Click", OnClickUpdateDot)
@@ -824,13 +849,25 @@ ShowAbout(*) {
         SetTimer(pulseTimer, 40)
     }
 
-    ; Theme toggle (always present). Glyph + tint reflect current themeState;
-    ; ApplyThemeToAbout (called at the end of ShowAbout) normalizes both, so the
-    ; literal here just needs the right initial character.
-    initialGlyph := (themeState = "dark") ? Chr(0x2600) : Chr(0x1F319)   ; sun in dark / moon in light = target action
-    aboutGui.SetFont("s22 Bold cD9A300", "Segoe UI Symbol")
-    aboutThemeIcon := aboutGui.Add("Text", Format("x{1} y{2} w{3} h36 Center", themeIconX, themeIconY, iconW), initialGlyph)
-    aboutThemeIcon.OnEvent("Click", ToggleTheme)
+    ; Pill background: an empty Text control clipped to a rounded-rect region.
+    ; Added BEFORE the glyph cells so they paint on top of it. SetWindowRgn takes
+    ; ownership of the region handle - no DeleteObject needed.
+    aboutThemePill := aboutGui.Add("Text", Format("x{1} y{2} w{3} h{4}", pillX, pillY, pillW, pillH))
+    pillRgn := DllCall("gdi32\CreateRoundRectRgn", "Int", 0, "Int", 0
+        , "Int", pillW + 1, "Int", pillH + 1, "Int", pillH, "Int", pillH, "Ptr")
+    DllCall("user32\SetWindowRgn", "Ptr", aboutThemePill.Hwnd, "Ptr", pillRgn, "Int", true)
+    aboutThemePill.OnEvent("Click", ToggleTheme)
+
+    ; Glyph cells: fixed characters (sun 0x2600 / moon 0x263E - both monochrome
+    ; Segoe UI Symbol glyphs, so BOTH are tintable; the old emoji moon 0x1F319 was
+    ; color-locked and could not be greyed out). s15 is ~1/3 smaller than the old
+    ; s22 single icon. Cells are inset so they never overlap the pill's corner
+    ; curves, and their opaque backgrounds are kept in sync with the pill fill.
+    aboutGui.SetFont("s15 Bold", "Segoe UI Symbol")
+    aboutThemeSun  := aboutGui.Add("Text", Format("x{1} y{2} w{3} h{4} Center", pillX + 7, pillY + 2, cellW, cellH), Chr(0x2600))
+    aboutThemeSun.OnEvent("Click", SetTheme.Bind("light"))
+    aboutThemeMoon := aboutGui.Add("Text", Format("x{1} y{2} w{3} h{4} Center", pillX + 7 + cellW + 2, pillY + 2, cellW, cellH), Chr(0x263E))
+    aboutThemeMoon.OnEvent("Click", SetTheme.Bind("dark"))
 
     ; Single polling routine for both the dot and theme-icon hover tooltips.
     SetTimer(UpdateAboutHoverTooltips, 100)
@@ -921,7 +958,7 @@ ApplyAboutAndClose() {
 
 CloseAbout() {
     global aboutGui, aboutDot, pulseTimer, aboutRunOnLoginCb, aboutRunAsAdminCb
-    global aboutThemeIcon, aboutControlRefs
+    global aboutThemePill, aboutThemeSun, aboutThemeMoon, aboutControlRefs
     if (pulseTimer) {
         SetTimer(pulseTimer, 0)
         pulseTimer := 0
@@ -935,16 +972,19 @@ CloseAbout() {
     aboutDot := 0
     aboutRunOnLoginCb := 0
     aboutRunAsAdminCb := 0
-    aboutThemeIcon := 0
+    aboutThemePill := 0
+    aboutThemeSun := 0
+    aboutThemeMoon := 0
     aboutControlRefs := ""
 }
 
 UpdateAboutHoverTooltips() {
     ; Single polling routine for all About-dialog hover tooltips. Tracks which
     ; control (if any) the cursor is over; shows the matching tooltip; dismisses
-    ; on leave. Used by both the update dot and the theme toggle - AHK Text
+    ; on leave. Used by both the update dot and the theme-toggle pill - AHK Text
     ; controls don't fire MouseEnter events, so we sample MouseGetPos at 100ms.
-    global aboutGui, aboutDot, aboutThemeIcon, UpdateAvailable, UpdateVersion, themeState
+    global aboutGui, aboutDot, aboutThemePill, aboutThemeSun, aboutThemeMoon
+    global UpdateAvailable, UpdateVersion, themeState
     static showing := ""   ; "" | "dot" | "theme"
 
     if (!aboutGui || !IsObject(aboutGui)) {
@@ -965,7 +1005,9 @@ UpdateAboutHoverTooltips() {
     target := ""
     if (UpdateAvailable && IsObject(aboutDot) && ctrlHwnd == aboutDot.Hwnd) {
         target := "dot"
-    } else if (IsObject(aboutThemeIcon) && ctrlHwnd == aboutThemeIcon.Hwnd) {
+    } else if ((IsObject(aboutThemePill) && ctrlHwnd == aboutThemePill.Hwnd)
+            || (IsObject(aboutThemeSun)  && ctrlHwnd == aboutThemeSun.Hwnd)
+            || (IsObject(aboutThemeMoon) && ctrlHwnd == aboutThemeMoon.Hwnd)) {
         target := "theme"
     }
 
@@ -1097,22 +1139,22 @@ CheckForUpdateAsync() {
 
 AddUpdateDotToAbout() {
     ; Live-inject the pulsing blue update dot into an already-open About dialog.
-    ; No-op if About isn't open, the dot already exists, or the theme icon
+    ; No-op if About isn't open, the dot already exists, or the theme-toggle pill
     ; (which anchors the dot's position) is missing. The hover-tooltip polling
     ; routine picks up the new dot automatically because it re-resolves
     ; aboutDot.Hwnd on every tick.
-    global aboutGui, aboutDot, aboutThemeIcon, pulseTimer
+    global aboutGui, aboutDot, aboutThemePill, pulseTimer
     if (!aboutGui || !IsObject(aboutGui))
         return
     if (aboutDot && IsObject(aboutDot))
         return
-    if (!aboutThemeIcon || !IsObject(aboutThemeIcon))
+    if (!aboutThemePill || !IsObject(aboutThemePill))
         return
 
     iconW := 32
-    aboutThemeIcon.GetPos(&tX, &tY, , )
-    dotX := tX - iconW - 12     ; 12px gap to the left of the theme icon
-    dotY := tY
+    aboutThemePill.GetPos(&tX, &tY, , )
+    dotX := tX - iconW - 12     ; 12px gap to the left of the pill
+    dotY := tY - 4              ; pill sits at y8; the h36 dot cell starts at y4 to share its center
 
     aboutGui.SetFont("s22 Bold cBlue", "Segoe UI Symbol")
     aboutDot := aboutGui.Add("Text", Format("x{1} y{2} w{3} h36 Center", dotX, dotY, iconW), Chr(9679))

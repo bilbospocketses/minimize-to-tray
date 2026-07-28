@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.30] - 2026-07-27
+
+### Changed
+- **Theme toggle is now a pill switch showing both modes at once.** The About dialog's single swapping sun/moon icon is replaced by a rounded pill holding a sun and a moon side by side, each about a third smaller than the old icon: the active mode's glyph is colored (gold sun in light mode, moonlight-blue moon in dark mode) and the inactive one is greyed out. Clicking a glyph selects that mode (clicking the already-active one does nothing); clicking the pill background toggles, and the "Switch to <theme> theme" hover tooltip covers the whole pill.
+- **Moon glyph switched from the color-emoji crescent to the monochrome Segoe UI Symbol crescent** (U+263E) so it can actually be tinted/greyed — the emoji glyph is color-locked and ignores text color.
+- The update-available dot keeps its exact position, now anchored to the pill instead of the old single icon (both in the About layout and the live-inject path).
+
 ## [1.0.29] - 2026-07-18
 
 ### Fixed
