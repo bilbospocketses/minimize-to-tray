@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.31] - 2026-07-28
+
+### Fixed
+- **Theme pill now actually renders with rounded corners.** 1.0.30 shaped the pill by clipping its controls with a window region (`SetWindowRgn`); the region registers, but Windows 11's composited rendering ignores it when painting these child controls, so the pill drew as a square-cornered box — with the glyphs top-aligned instead of centered. The pill (silhouette, fills, glyphs) is now pre-rendered into an anti-aliased bitmap at the display's physical pixel size, which fixes the corners and centering and is DPI-proof at any scale factor.
+
+### Changed
+- **The theme pill is now a true 50/50 split control.** Each glyph owns exactly half the pill, centered horizontally and vertically in its half, and the halves are shaded independently: the active mode's half gets a lighter fill and the inactive half a darker one, in both themes. Previously the whole pill shared one fill and only the glyph tints changed.
+
 ## [1.0.30] - 2026-07-27
 
 ### Changed

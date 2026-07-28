@@ -60,7 +60,7 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.30"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.31"       ; embedded version, kept in sync with vpk pack --packVersion
 ; Base tray tooltip; SetTrayIconForUpdateState swaps in an "update available" variant.
 global BASE_ICON_TIP := "minimize-to-tray`nWin+Shift+Z or`nMiddle-click title bar`nminimizes focused window to tray"
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
@@ -637,7 +637,8 @@ GetThemePalette(name) {
             toggleSunOn:  "D9A300",    ; gold sun when light is the active mode (unused here)
             toggleMoonOn: "9CC2FF",    ; moonlight blue when dark is the active mode
             toggleOff:    "6A6A6A",    ; greyed-out inactive glyph
-            togglePillBg: "2D2D2D",    ; pill fill (matches buttonBg)
+            togglePillOnBg:  "3F3F3F", ; active half of the pill (lighter)
+            togglePillOffBg: "262626", ; inactive half of the pill (darker)
             text:         "F2F2F2",    ; v1.0.7: rescue dialog body text
             buttonBg:     "2D2D2D",    ; v1.0.7: owner-drawn button fill (normal)
             buttonFg:     "F2F2F2",    ; v1.0.7: owner-drawn button text
@@ -663,8 +664,9 @@ GetThemePalette(name) {
         okButton:     "000000",
         toggleSunOn:  "D9A300",        ; gold sun when light is the active mode
         toggleMoonOn: "9CC2FF",        ; moonlight blue when dark is the active mode (unused here)
-        toggleOff:    "B0B0B0",        ; greyed-out inactive glyph
-        togglePillBg: "EFEFEF",        ; pill fill (subtle grey on the white dialog)
+        toggleOff:    "909090",        ; greyed-out inactive glyph (dark enough to read on the darker inactive half)
+        togglePillOnBg:  "EFEFEF",     ; active half of the pill (lighter)
+        togglePillOffBg: "D3D3D3",     ; inactive half of the pill (darker)
         text:         "000000",
         buttonBg:     "FDFDFD",
         buttonFg:     "000000",
@@ -700,23 +702,12 @@ ApplyThemeToAbout() {
         }
     }
 
-    ; Tint the theme-toggle pill. Both glyphs are always visible; the ACTIVE
-    ; mode's glyph is colored (gold sun / moonlight moon) and the inactive one
-    ; is greyed out. Glyph characters never change - only tints + pill fill.
-    if (IsObject(aboutThemePill)) {
-        try aboutThemePill.Opt("Background" pal.togglePillBg)
-        try aboutThemePill.Redraw()
-    }
-    if (IsObject(aboutThemeSun)) {
-        sunColor := (themeState = "light") ? pal.toggleSunOn : pal.toggleOff
-        try aboutThemeSun.Opt("c" sunColor " Background" pal.togglePillBg)
-        try aboutThemeSun.Redraw()
-    }
-    if (IsObject(aboutThemeMoon)) {
-        moonColor := (themeState = "dark") ? pal.toggleMoonOn : pal.toggleOff
-        try aboutThemeMoon.Opt("c" moonColor " Background" pal.togglePillBg)
-        try aboutThemeMoon.Redraw()
-    }
+    ; Repaint the theme-toggle pill bitmap for the new theme: the ACTIVE
+    ; mode's half gets the lighter fill + colored glyph (gold sun / moonlight
+    ; moon), the inactive half the darker fill + greyed glyph. The overlay
+    ; sun/moon Text controls are empty click targets - nothing to tint.
+    if (IsObject(aboutThemePill))
+        try RenderThemePill(aboutThemePill, themeState)
 
     ; Tell DWM to draw the OS title bar in the matching theme. Without this the
     ; title bar stays Light even when the app body goes Dark. Attribute 20 =
@@ -770,6 +761,100 @@ global aboutGui    := 0
 global aboutDot    := 0
 global pulseTimer  := 0
 global updateGui   := 0   ; the update-notification modal Gui (or 0 when closed)
+
+EnsureGdiplus() {
+    ; One-time GDI+ startup for the process. The token is intentionally never
+    ; released - GDI+ lives for the app's lifetime.
+    static token := 0
+    if (token)
+        return
+    input := Buffer(24, 0)          ; GdiplusStartupInput (x64 layout)
+    NumPut("UInt", 1, input, 0)     ; GdiplusVersion = 1
+    DllCall("gdiplus\GdiplusStartup", "Ptr*", &token, "Ptr", input, "Ptr", 0)
+}
+
+RenderThemePill(pillCtrl, themeName) {
+    ; Redraw the About theme pill into an in-memory GDI+ bitmap and hand it to
+    ; the Picture control. Drawn at the control's PHYSICAL pixel size
+    ; (GetWindowRect), so the rounded silhouette stays correct at any DPI
+    ; scale. Window-region clipping (SetWindowRgn) is NOT usable for this:
+    ; the region registers (GetWindowRgn confirms it) but Win11's composited
+    ; rendering ignores it when painting these child controls, which is why
+    ; the v1.0.30 pill drew as a square box. The bitmap's corners are filled
+    ; with the dialog's background color, so the pill reads as a rounded,
+    ; anti-aliased capsule: the ACTIVE mode's half gets the lighter fill +
+    ; colored glyph (gold sun / moonlight moon), the inactive half the darker
+    ; fill + greyed glyph, split 50/50 with each glyph centered in its half.
+    EnsureGdiplus()
+    pal := GetThemePalette(themeName)
+
+    rect := Buffer(16, 0)
+    DllCall("user32\GetWindowRect", "Ptr", pillCtrl.Hwnd, "Ptr", rect)
+    w := NumGet(rect, 8, "Int") - NumGet(rect, 0, "Int")
+    h := NumGet(rect, 12, "Int") - NumGet(rect, 4, "Int")
+    if (w <= 0 || h <= 0)
+        return
+    argb := (hex) => 0xFF000000 | Integer("0x" hex)
+
+    DllCall("gdiplus\GdipCreateBitmapFromScan0", "Int", w, "Int", h, "Int", 0
+        , "Int", 0x26200A, "Ptr", 0, "Ptr*", &pBmp := 0)                    ; PixelFormat32bppARGB
+    DllCall("gdiplus\GdipGetImageGraphicsContext", "Ptr", pBmp, "Ptr*", &gfx := 0)
+    DllCall("gdiplus\GdipSetSmoothingMode", "Ptr", gfx, "Int", 4)           ; AntiAlias
+    DllCall("gdiplus\GdipSetTextRenderingHint", "Ptr", gfx, "Int", 4)       ; grayscale AA (no ClearType fringing on the bitmap)
+    DllCall("gdiplus\GdipGraphicsClear", "Ptr", gfx, "UInt", argb(pal.bg))  ; corners blend into the dialog
+
+    ; Rounded-pill path: corner diameter = pill height = semicircular ends.
+    d := h
+    DllCall("gdiplus\GdipCreatePath", "Int", 0, "Ptr*", &path := 0)
+    DllCall("gdiplus\GdipAddPathArc", "Ptr", path, "Float", 0, "Float", 0, "Float", d, "Float", d, "Float", 180, "Float", 90)
+    DllCall("gdiplus\GdipAddPathArc", "Ptr", path, "Float", w - d, "Float", 0, "Float", d, "Float", d, "Float", 270, "Float", 90)
+    DllCall("gdiplus\GdipAddPathArc", "Ptr", path, "Float", w - d, "Float", h - d, "Float", d, "Float", d, "Float", 0, "Float", 90)
+    DllCall("gdiplus\GdipAddPathArc", "Ptr", path, "Float", 0, "Float", h - d, "Float", d, "Float", d, "Float", 90, "Float", 90)
+    DllCall("gdiplus\GdipClosePathFigure", "Ptr", path)
+
+    ; Inactive fill across the whole pill, then re-fill the active half with
+    ; the lighter color, clipped to its side of the 50/50 split.
+    halfW := w / 2
+    activeX := (themeName = "light") ? 0 : halfW
+    DllCall("gdiplus\GdipCreateSolidFill", "UInt", argb(pal.togglePillOffBg), "Ptr*", &brOff := 0)
+    DllCall("gdiplus\GdipFillPath", "Ptr", gfx, "Ptr", brOff, "Ptr", path)
+    DllCall("gdiplus\GdipCreateSolidFill", "UInt", argb(pal.togglePillOnBg), "Ptr*", &brOn := 0)
+    DllCall("gdiplus\GdipSetClipRect", "Ptr", gfx, "Float", activeX, "Float", 0, "Float", halfW, "Float", h, "Int", 0)
+    DllCall("gdiplus\GdipFillPath", "Ptr", gfx, "Ptr", brOn, "Ptr", path)
+    DllCall("gdiplus\GdipResetClip", "Ptr", gfx)
+
+    ; Glyphs: sun centered in the left half, moon centered in the right half
+    ; (15pt bold Segoe UI Symbol at the current DPI, same visual size as the
+    ; old s15 text cells; both glyphs are monochrome so both are tintable).
+    DllCall("gdiplus\GdipCreateFontFamilyFromName", "Str", "Segoe UI Symbol", "Ptr", 0, "Ptr*", &fam := 0)
+    fontPx := 15 * A_ScreenDPI / 72.0
+    DllCall("gdiplus\GdipCreateFont", "Ptr", fam, "Float", fontPx, "Int", 1, "Int", 2, "Ptr*", &font := 0)  ; 1 = bold, 2 = UnitPixel
+    DllCall("gdiplus\GdipCreateStringFormat", "Int", 0, "Int", 0, "Ptr*", &fmt := 0)
+    DllCall("gdiplus\GdipSetStringFormatAlign", "Ptr", fmt, "Int", 1)       ; center horizontally
+    DllCall("gdiplus\GdipSetStringFormatLineAlign", "Ptr", fmt, "Int", 1)   ; center vertically
+    sunColor  := (themeName = "light") ? pal.toggleSunOn  : pal.toggleOff
+    moonColor := (themeName = "dark")  ? pal.toggleMoonOn : pal.toggleOff
+    rc := Buffer(16, 0)
+    for glyph in [{chr: Chr(0x2600), color: sunColor, x: 0.0}, {chr: Chr(0x263E), color: moonColor, x: halfW}] {
+        NumPut("Float", glyph.x, rc, 0), NumPut("Float", 0, rc, 4)
+        NumPut("Float", halfW, rc, 8), NumPut("Float", h, rc, 12)
+        DllCall("gdiplus\GdipCreateSolidFill", "UInt", argb(glyph.color), "Ptr*", &brTxt := 0)
+        DllCall("gdiplus\GdipDrawString", "Ptr", gfx, "Str", glyph.chr, "Int", -1, "Ptr", font, "Ptr", rc, "Ptr", fmt, "Ptr", brTxt)
+        DllCall("gdiplus\GdipDeleteBrush", "Ptr", brTxt)
+    }
+
+    DllCall("gdiplus\GdipCreateHBITMAPFromBitmap", "Ptr", pBmp, "Ptr*", &hbmp := 0, "UInt", argb(pal.bg))
+    DllCall("gdiplus\GdipDeleteStringFormat", "Ptr", fmt)
+    DllCall("gdiplus\GdipDeleteFont", "Ptr", font)
+    DllCall("gdiplus\GdipDeleteFontFamily", "Ptr", fam)
+    DllCall("gdiplus\GdipDeleteBrush", "Ptr", brOn)
+    DllCall("gdiplus\GdipDeleteBrush", "Ptr", brOff)
+    DllCall("gdiplus\GdipDeletePath", "Ptr", path)
+    DllCall("gdiplus\GdipDeleteGraphics", "Ptr", gfx)
+    DllCall("gdiplus\GdipDisposeImage", "Ptr", pBmp)
+
+    pillCtrl.Value := "HBITMAP:" hbmp    ; the control takes ownership of the handle
+}
 
 ShowAbout(*) {
     global aboutGui, aboutDot, pulseTimer, APP_VERSION, UpdateAvailable, UpdateVersion
@@ -825,16 +910,16 @@ ShowAbout(*) {
 
     ; Top-right corner controls. Layout (left -> right):
     ;   [optional update dot]  [theme-toggle pill]
-    ; The pill is ALWAYS present: sun + moon glyphs side by side in a rounded
-    ; "pill" box; the ACTIVE mode's glyph is colored, the other greyed out
-    ; (tints applied by ApplyThemeToAbout). The update dot is only created when
-    ; an update is available, and sits 12px to the left of the pill.
+    ; The pill is ALWAYS present: a rounded box split 50/50 into a sun half and
+    ; a moon half. The ACTIVE mode's half gets the lighter fill + colored
+    ; glyph; the inactive half gets the darker fill + greyed glyph (tints
+    ; applied by ApplyThemeToAbout). The update dot is only created when an
+    ; update is available, and sits 12px to the left of the pill.
     iconW    := 32                           ; update-dot cell width (unchanged)
     rightEdge := 28 + contentW
-    pillW    := 60                           ; 7 pad + 22 sun + 2 gap + 22 moon + 7 pad
+    pillW    := 60
     pillH    := 28
-    cellW    := 22
-    cellH    := 24
+    halfW    := pillW // 2                   ; 50/50 split: sun left, moon right
     pillX    := rightEdge + 20 - pillW       ; keep the old cluster's right edge
     pillY    := 8                            ; centers on y22, matching the dot's h36 at y4
 
@@ -849,24 +934,16 @@ ShowAbout(*) {
         SetTimer(pulseTimer, 40)
     }
 
-    ; Pill background: an empty Text control clipped to a rounded-rect region.
-    ; Added BEFORE the glyph cells so they paint on top of it. SetWindowRgn takes
-    ; ownership of the region handle - no DeleteObject needed.
-    aboutThemePill := aboutGui.Add("Text", Format("x{1} y{2} w{3} h{4}", pillX, pillY, pillW, pillH))
-    pillRgn := DllCall("gdi32\CreateRoundRectRgn", "Int", 0, "Int", 0
-        , "Int", pillW + 1, "Int", pillH + 1, "Int", pillH, "Int", pillH, "Ptr")
-    DllCall("user32\SetWindowRgn", "Ptr", aboutThemePill.Hwnd, "Ptr", pillRgn, "Int", true)
+    ; The pill is three controls: a Picture holding the fully-rendered pill
+    ; bitmap (rounded silhouette, split fills, glyphs - see RenderThemePill;
+    ; clicking it toggles) under two empty transparent Text overlays that act
+    ; as the per-half click targets and hover-tooltip handles. Sun is the
+    ; left half, moon the right.
+    aboutThemePill := aboutGui.Add("Picture", Format("x{1} y{2} w{3} h{4}", pillX, pillY, pillW, pillH))
     aboutThemePill.OnEvent("Click", ToggleTheme)
-
-    ; Glyph cells: fixed characters (sun 0x2600 / moon 0x263E - both monochrome
-    ; Segoe UI Symbol glyphs, so BOTH are tintable; the old emoji moon 0x1F319 was
-    ; color-locked and could not be greyed out). s15 is ~1/3 smaller than the old
-    ; s22 single icon. Cells are inset so they never overlap the pill's corner
-    ; curves, and their opaque backgrounds are kept in sync with the pill fill.
-    aboutGui.SetFont("s15 Bold", "Segoe UI Symbol")
-    aboutThemeSun  := aboutGui.Add("Text", Format("x{1} y{2} w{3} h{4} Center", pillX + 7, pillY + 2, cellW, cellH), Chr(0x2600))
+    aboutThemeSun  := aboutGui.Add("Text", Format("x{1} y{2} w{3} h{4} BackgroundTrans", pillX, pillY, halfW, pillH))
     aboutThemeSun.OnEvent("Click", SetTheme.Bind("light"))
-    aboutThemeMoon := aboutGui.Add("Text", Format("x{1} y{2} w{3} h{4} Center", pillX + 7 + cellW + 2, pillY + 2, cellW, cellH), Chr(0x263E))
+    aboutThemeMoon := aboutGui.Add("Text", Format("x{1} y{2} w{3} h{4} BackgroundTrans", pillX + halfW, pillY, pillW - halfW, pillH))
     aboutThemeMoon.OnEvent("Click", SetTheme.Bind("dark"))
 
     ; Single polling routine for both the dot and theme-icon hover tooltips.
