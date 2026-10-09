@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **CI: American-spelling gate.** `build-and-test` now runs the gate from `bilbospocketses/american-spelling` (pinned to v1.0.2 by commit SHA), which fails a pull request whose added lines or commit messages use British spelling. Its checkout is now a full clone (`fetch-depth: 0`) because the gate diffs from the merge-base with `main`.
+
 ## [1.0.31] - 2026-07-28
 
 ### Fixed

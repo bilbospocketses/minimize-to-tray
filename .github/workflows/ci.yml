@@ -39,6 +39,53 @@ jobs:
     runs-on: windows-2025  # explicit pin, not the windows-latest moving alias. GitHub's Jun-2026 migration swaps VS2022->VS2026 under this same label (label stays); build is VS-agnostic (setup-dotnet + vendored Ahk2Exe), so transparent.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The American-spelling gate below diffs from the merge-base with the
+          # base branch and refuses a shallow clone.
+          fetch-depth: 0
+
+      # American spelling. The cross-repo gate from bilbospocketses/american-spelling
+      # scans the lines this branch adds and its commit messages, and fails on a
+      # British spelling. It runs first because it is the cheapest gate here.
+      #
+      # Steps inside build-and-test rather than a job of their own: main's ruleset
+      # requires a check named exactly `build-and-test`, so a separate job would
+      # not be required and could rot unnoticed.
+      #
+      # Exceptions are not kept in this repo. A verbatim quote takes the inline
+      # `spelling: allow` marker; an identifier used on many lines goes in the
+      # gate's central allow.txt, and reaches this repo when the pin is bumped.
+      # On a push to main the base is main itself, so there is nothing to scan.
+      #
+      # These steps use `shell: bash` (Git Bash on the Windows runner) so that
+      # `${BASE}` expands and `rm -rf` works; `python` is the runner's own
+      # Python 3 (`python3` is not on PATH on Windows), and the gate is stdlib-only.
+      - name: Fetch the base branch
+        shell: bash
+        run: git fetch --no-tags origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}"
+        env:
+          BASE: ${{ github.base_ref || github.event.repository.default_branch }}
+      - name: Check out the American-spelling gate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bilbospocketses/american-spelling
+          ref: 21ed7e5524c511d9ee584778d42b72e6ddaeba86 # v1.0.2
+          path: .american-spelling
+          persist-credentials: false
+      - name: Check American spelling
+        shell: bash
+        run: >-
+          python .american-spelling/check-american-spelling.py
+          --repo .
+          --base "origin/${BASE}"
+          --repo-slug "${SLUG}"
+        env:
+          BASE: ${{ github.base_ref || github.event.repository.default_branch }}
+          SLUG: ${{ github.repository }}
+      - name: Remove the gate checkout
+        # Keeps it out of the tree build.ps1 compiles and packages into dist/.
+        shell: bash
+        run: rm -rf .american-spelling
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
