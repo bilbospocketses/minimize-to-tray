@@ -40,6 +40,8 @@ Two ways to minimize the current window to the system tray:
 - **`Win+Shift+Z`** — minimize the focused window.
 - **Middle-click on a window's title bar** — minimize that window.
 
+Another program can also ask for a **named** window to be minimized: post the registered window message `minimize-to-tray.HideHwnd.v1` (`RegisterWindowMessage`) to the hidden window titled `minimize-to-tray-stub` (class `AutoHotkeyGUI`, process `minimize-to-tray.exe`), with the window's handle in `wParam`. That window carries a property of the same name (value 1) when the running version supports it. Only a visible top-level window of another process is hidden; the shell's desktop and taskbar never are.
+
 Windows of the same app collapse under a single tray icon (showing the app's own icon):
 
 - **Left-click** the per-app tray icon → restore the most recently minimized window (LIFO).

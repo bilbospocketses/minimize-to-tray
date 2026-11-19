@@ -108,6 +108,12 @@ global APP_REG_KEY                 := "HKEY_CURRENT_USER\Software\bilbospocketse
 global FIRST_RUN_PENDING_REG_VALUE := "FirstRunPending"
 global APP_THEME_REG_VALUE         := "Theme"
 
+; Hide a NAMED window on request: another program posts this registered message to the stub
+; window ("minimize-to-tray-stub") with the window's hwnd in wParam. The stub carries a window
+; property of the same name (value 1), so a caller can tell this build handles the message.
+global MTT_HIDE_HWND_NAME := "minimize-to-tray.HideHwnd.v1"
+global WM_MTT_HIDE_HWND   := 0
+
 ; v1.0.7 rescue mode: persistent hidden-window tracking + diagnostic state.
 ; APP_DATA_DIR is %LOCALAPPDATA%\bilbospocketses\minimize-to-tray\, created in Initialize().
 global APP_DATA_DIR        := ""
@@ -238,6 +244,20 @@ Initialize() {
         okMain := DllCall("user32\ChangeWindowMessageFilterEx", "Ptr", A_ScriptHwnd, "UInt", WM_TASKBARCREATED, "UInt", 1, "Ptr", 0, "Int")  ; MSGFLT_ALLOW
         okStub := DllCall("user32\ChangeWindowMessageFilterEx", "Ptr", scriptGuiHwnd, "UInt", WM_TASKBARCREATED, "UInt", 1, "Ptr", 0, "Int")
         MsgFilterAllowed := "main=" (okMain ? 1 : 0) " stub=" (okStub ? 1 : 0)
+    }
+
+    ; Hide a NAMED window on request (MTT_HIDE_HWND_NAME, wParam = the hwnd). The hotkey hides
+    ; the window that is active when its handler RUNS, so a press deferred behind the Critical
+    ; heartbeat can hide the wrong window (the window opened in the meantime); a named request
+    ; hides only the window it names. The message is let through the UIPI filter like
+    ; TaskbarCreated, so a medium-integrity caller reaches an elevated tray, and the stub carries
+    ; the capability property only once the handler is registered.
+    global WM_MTT_HIDE_HWND
+    WM_MTT_HIDE_HWND := DllCall("RegisterWindowMessageW", "Str", MTT_HIDE_HWND_NAME, "UInt")
+    if (WM_MTT_HIDE_HWND) {
+        OnMessage(WM_MTT_HIDE_HWND, OnHideHwndRequest)
+        DllCall("user32\ChangeWindowMessageFilterEx", "Ptr", scriptGuiHwnd, "UInt", WM_MTT_HIDE_HWND, "UInt", 1, "Ptr", 0, "Int")  ; MSGFLT_ALLOW
+        DllCall("user32\SetPropW", "Ptr", scriptGuiHwnd, "Str", MTT_HIDE_HWND_NAME, "Ptr", 1)
     }
 
     ; Custom app tray icon. When running as compiled .exe, the embedded icon
@@ -1386,6 +1406,42 @@ MinimizeFocused() {
     if (!hwnd)
         return
     HideAndStash(hwnd)
+}
+
+OnHideHwndRequest(wParam, lParam, msg, hwnd) {
+    ; A named hide request (see Initialize): wParam is the window. It is validated here, then
+    ; hidden on a thread of its own (SetTimer), so a caller is never held and only THIS window is
+    ; hidden. Returns 1 when accepted, 0 when refused (a posting caller does not see either; it
+    ; checks the window itself).
+    target := wParam
+    refusal := HideRequestRefusal(target)
+    if (refusal != "") {
+        DiagLog("HIDE-HWND refused hwnd=" target ": " refusal)
+        return 0
+    }
+    DiagLog("HIDE-HWND request hwnd=" target)
+    SetTimer(() => HideAndStash(target), -1)
+    return 1
+}
+
+HideRequestRefusal(target) {
+    ; Why a named request is not honored, or "" when it is: only a live, visible, top-level window
+    ; of another process, and never the shell's desktop or taskbar.
+    if (!target || !DllCall("IsWindow", "Ptr", target))
+        return "not a window"
+    if (DllCall("GetAncestor", "Ptr", target, "UInt", 2, "Ptr") != target)   ; GA_ROOT
+        return "not a top-level window"
+    if (!DllCall("IsWindowVisible", "Ptr", target))
+        return "not visible"
+    pid := 0
+    DllCall("GetWindowThreadProcessId", "Ptr", target, "UInt*", &pid)
+    if (pid = DllCall("GetCurrentProcessId", "UInt"))
+        return "a window of minimize-to-tray itself"
+    cls := ""
+    try cls := WinGetClass("ahk_id " target)
+    if (cls = "Progman" || cls = "WorkerW" || cls = "Shell_TrayWnd" || cls = "Shell_SecondaryTrayWnd")
+        return "a shell window (" cls ")"
+    return ""
 }
 
 MouseOverTitleBar() {
