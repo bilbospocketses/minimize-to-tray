@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.32] - 2026-11-20
+
 ### Added
 - **Minimize a named window on request.** Another program can post the registered message `minimize-to-tray.HideHwnd.v1` to the hidden `minimize-to-tray-stub` window, with a window handle in `wParam`, and exactly that window is minimized to the tray. The stub window carries a property of the same name so a caller can tell the running version supports it, and the message passes the UIPI filter, so it also reaches the app when it runs as administrator. `Win+Shift+Z` minimizes the window that is active when the app handles the keypress; when the app is busy for a moment (its tray-icon check holds hotkeys back), a scripted keypress could land on a window that opened in the meantime. A named request cannot. Requests for a hidden, child, own or shell window are refused and logged in `tray-diag.log`.
 
