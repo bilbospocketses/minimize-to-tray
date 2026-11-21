@@ -97,6 +97,19 @@ if (-not (Test-Path -LiteralPath $mainExePath)) {
 $mainSizeKB = [math]::Round((Get-Item -LiteralPath $mainExePath).Length / 1KB, 1)
 Write-Host ('      built : ' + $mainSizeKB + ' KB')
 
+# The exe's file and product version must be the app's release version ($Version),
+# not the AutoHotkey runtime's (the /base stub's own version info, e.g. 2.0.26).
+# Accepts $Version itself or $Version padded with trailing .0 parts (1.0.33.0).
+$mainVerInfo  = (Get-Item -LiteralPath $mainExePath).VersionInfo
+$versionRegex = '^' + [regex]::Escape($Version) + '(\.0)*$'
+foreach ($field in @('FileVersion', 'ProductVersion')) {
+    $actual = [string]$mainVerInfo.$field
+    if ($actual -notmatch $versionRegex) {
+        throw "$mainExeName $field is '$actual', expected '$Version'. The ;@Ahk2Exe-SetVersion directive after APP_VERSION in minimize-to-tray.ahk sets it from APP_VERSION, which must equal build.ps1's `$Version."
+    }
+}
+Write-Host ('      version : ' + $mainVerInfo.FileVersion + ' (file), ' + $mainVerInfo.ProductVersion + ' (product)')
+
 # ---- Stage 2: dotnet publish updater-helper --------------------------------
 $helperExeName = 'updater-helper.exe'
 $helperOutDir  = Join-Path $stagingDir '_helper_publish'
