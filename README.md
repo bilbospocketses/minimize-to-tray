@@ -136,7 +136,7 @@ Output (gitignored, in `dist/`):
 - `minimize-to-tray-<version>-full.nupkg` (Velopack release package)
 - `RELEASES`, `releases.win.json`, `assets.win.json` (Velopack feed manifests)
 
-To stamp a custom version: `.\build.ps1 -Version '1.0.X'`.
+The release version lives in two places that must match: `$Version` in `build.ps1` and `APP_VERSION` in `minimize-to-tray.ahk`. The About box and the exe's file version both come from `APP_VERSION`. A release also needs a `## [X.Y.Z] - YYYY-MM-DD` section in `CHANGELOG.md`. The build stops if the compiled exe's version is not `$Version`, or if that CHANGELOG section is missing, so `.\build.ps1 -Version '1.0.X'` works only when `APP_VERSION` is also `1.0.X`.
 
 Requirements:
 - Windows PowerShell 5.1+ (ships with Windows 10/11) or PowerShell 7+.

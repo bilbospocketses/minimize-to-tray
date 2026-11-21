@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Docs: where the version comes from.** README's build section and `build.ps1`'s `-Version` help now say that `$Version` in `build.ps1` and `APP_VERSION` in `minimize-to-tray.ahk` must match, and that the build stops when they do not. README still suggested `.\build.ps1 -Version '1.0.X'` to stamp any version, which 1.0.33's version check refuses unless `APP_VERSION` matches.
+
 ## [1.0.33] - 2026-11-21
 
 ### Fixed

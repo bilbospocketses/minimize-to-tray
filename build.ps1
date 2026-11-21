@@ -19,8 +19,12 @@
     pwsh 7+ installation.
 
 .PARAMETER Version
-    Override the version stamped into the Velopack package. Defaults to the
-    APP_VERSION constant in minimize-to-tray.ahk (kept in sync there).
+    The release version stamped into the Velopack package and updater-helper.
+    It must equal the APP_VERSION constant in minimize-to-tray.ahk: the main
+    exe's file and product version come from APP_VERSION, and the build stops
+    when they do not match this value. So a -Version different from
+    APP_VERSION fails the build; to release, change both (and add a CHANGELOG
+    section for the version).
 
 .PARAMETER SkipHelper
     Skip the updater-helper publish step (useful for iterating on AHK changes
