@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.33] - 2026-11-21
+
+### Fixed
+- **The program's file version now shows the app's version, not AutoHotkey's.** `minimize-to-tray.exe` reported 2.0.26 (the version of the AutoHotkey runtime it is built on) as its file and product version, in Explorer's Details tab and anywhere else that reads it. It now reports the release version, 1.0.33, the same version the About box shows. The build now checks this and refuses to produce an exe that reports the wrong version.
+
 ## [1.0.32] - 2026-11-20
 
 ### Added
