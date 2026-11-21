@@ -60,7 +60,11 @@ global winEventCallback := 0             ; CallbackCreate ptr for OnWinEvent
 global hWinEventHook    := 0             ; SetWinEventHook handle
 
 ; Velopack update awareness (populated by CheckForUpdateAsync via updater-helper.exe)
-global APP_VERSION      := "1.0.32"       ; embedded version, kept in sync with vpk pack --packVersion
+global APP_VERSION      := "1.0.33"       ; embedded version, kept in sync with vpk pack --packVersion
+; Ahk2Exe: stamp the exe's file + product version from the quoted version on the
+; line above (A_PriorLine), so it is not the AutoHotkey base stub's own version.
+; Keep this directive directly under APP_VERSION; build.ps1 checks the result.
+;@Ahk2Exe-SetVersion %A_PriorLine~U)^.*"(.+)".*$~$1%
 ; Base tray tooltip; SetTrayIconForUpdateState swaps in an "update available" variant.
 global BASE_ICON_TIP := "minimize-to-tray`nWin+Shift+Z or`nMiddle-click title bar`nminimizes focused window to tray"
 global UpdateAvailable  := false         ; true if updater-helper.exe reports a newer release
